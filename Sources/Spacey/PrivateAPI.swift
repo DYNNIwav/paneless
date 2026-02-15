@@ -33,7 +33,7 @@ func CGSHideSpaces(_ conn: CGSConnectionID, _ spaces: CFArray)
 @_silgen_name("CGSCopyManagedDisplayForSpace")
 func CGSCopyManagedDisplayForSpace(_ conn: CGSConnectionID, _ space: CGSSpaceID) -> CFString
 
-// Window alpha — only works on windows owned by the calling process (our overlays)
+// Window alpha — works on any window (same approach as yabai)
 // NOTE: The C API uses `float` (32-bit), NOT CGFloat/Double (64-bit on ARM64)
 @discardableResult
 @_silgen_name("CGSSetWindowAlpha")

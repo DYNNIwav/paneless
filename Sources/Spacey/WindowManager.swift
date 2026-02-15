@@ -20,6 +20,7 @@ class WindowManager: WindowObserverDelegate {
 
     private var mouseMonitor: Any?
     private var lastMouseFocusTime: Date = .distantPast
+    private var dimmedWindows: Set<CGWindowID> = []
     private var dimOverlays: [CGWindowID: NSWindow] = [:]
     private var resizeMonitor: Any?
     private var isResizing = false
@@ -76,6 +77,11 @@ class WindowManager: WindowObserverDelegate {
         // Mouse drag resize between tiled windows
         setupResizeMonitor()
 
+        // Force ProMotion to stay at max refresh rate (120Hz)
+        if config.forceProMotion {
+            startDisplayLink()
+        }
+
         spaceyLog("Spacey started (monitors: \(NSScreen.screens.count), bindings: \(config.keyBindings.count))")
     }
 
@@ -89,9 +95,10 @@ class WindowManager: WindowObserverDelegate {
 
         Animator.shared.cancelAll()
         BorderManager.shared.removeAll()
-        removeDimOverlays()
+        restoreAllDimming()
         stopFocusFollowsMouse()
         stopResizeMonitor()
+        stopDisplayLink()
         NotificationCenter.default.removeObserver(self)
         observer.stop()
         eventTap.stop()
@@ -383,7 +390,14 @@ class WindowManager: WindowObserverDelegate {
 
         // Update dimming
         if config.dimUnfocused <= 0 {
-            removeDimOverlays()
+            restoreAllDimming()
+        }
+
+        // Update ProMotion forcing
+        if config.forceProMotion {
+            startDisplayLink()
+        } else {
+            stopDisplayLink()
         }
 
         scanCurrentSpace()
@@ -703,6 +717,7 @@ class WindowManager: WindowObserverDelegate {
         floatingWindows.remove(windowID)
         fullscreenWindows.remove(windowID)
         stickyWindows.remove(windowID)
+        dimmedWindows.remove(windowID)
         if let overlay = dimOverlays.removeValue(forKey: windowID) {
             overlay.orderOut(nil)
         }
@@ -936,11 +951,11 @@ class WindowManager: WindowObserverDelegate {
         }
     }
 
-    // MARK: - Dim Unfocused Windows (Overlay + CGSOrderWindow)
+    // MARK: - Dim Unfocused Windows (Rounded Overlay + CGSOrderWindow)
 
     private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
         let dimAmount = config.dimUnfocused
-        guard dimAmount > 0 else { removeDimOverlays(); return }
+        guard dimAmount > 0 else { restoreAllDimming(); return }
 
         let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
         let conn = CGSMainConnectionID()
@@ -948,16 +963,22 @@ class WindowManager: WindowObserverDelegate {
         let currentLayouts = layouts ?? layoutEngine.calculateFrames(in: getTilingRegion())
 
         // Remove overlays for windows no longer tiled or now focused
-        for wid in Array(dimOverlays.keys) {
+        for wid in Array(dimmedWindows) {
             if !tiledSet.contains(wid) || wid == focusedID {
-                dimOverlays.removeValue(forKey: wid)?.orderOut(nil)
+                if let overlay = dimOverlays.removeValue(forKey: wid) {
+                    overlay.orderOut(nil)
+                }
+                dimmedWindows.remove(wid)
             }
         }
 
         // Create/update overlays for unfocused tiled windows
         for (wid, frame) in currentLayouts {
             if wid == focusedID {
-                dimOverlays.removeValue(forKey: wid)?.orderOut(nil)
+                if let overlay = dimOverlays.removeValue(forKey: wid) {
+                    overlay.orderOut(nil)
+                }
+                dimmedWindows.remove(wid)
                 continue
             }
 
@@ -974,15 +995,16 @@ class WindowManager: WindowObserverDelegate {
                 let overlayWid = CGWindowID(overlay.windowNumber)
                 CGSOrderWindow(conn, overlayWid, 1, wid)
             }
+            dimmedWindows.insert(wid)
         }
     }
 
-    private func removeDimOverlays() {
-        guard !dimOverlays.isEmpty else { return }
+    private func restoreAllDimming() {
         for (_, overlay) in dimOverlays {
             overlay.orderOut(nil)
         }
         dimOverlays.removeAll()
+        dimmedWindows.removeAll()
     }
 
     private func makeDimOverlay(frame: NSRect, alpha: CGFloat) -> NSWindow {
@@ -993,11 +1015,20 @@ class WindowManager: WindowObserverDelegate {
             defer: false
         )
         window.isOpaque = false
-        window.backgroundColor = NSColor.black.withAlphaComponent(alpha)
+        window.backgroundColor = .clear
         window.level = .normal
         window.ignoresMouseEvents = true
         window.hasShadow = false
         window.collectionBehavior = [.stationary]
+
+        // Rounded corners matching macOS window radius
+        let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
+        view.layer?.cornerRadius = 10
+        view.layer?.masksToBounds = true
+        window.contentView = view
+
         window.orderFrontRegardless()
         return window
     }
@@ -1036,7 +1067,7 @@ class WindowManager: WindowObserverDelegate {
         let screenFrame = screenFrameInAX(for: screen)
 
         // Remove dim overlays before switching (they reference old workspace windows)
-        removeDimOverlays()
+        restoreAllDimming()
 
         // Save current state into WorkspaceManager
         saveWorkspaceState(workspace: currentWS, monitor: monitorID)
@@ -1085,6 +1116,7 @@ class WindowManager: WindowObserverDelegate {
         let element = axElements.removeValue(forKey: windowID)
         let wasFloating = floatingWindows.remove(windowID) != nil
         let wasFullscreen = fullscreenWindows.remove(windowID) != nil
+        dimmedWindows.remove(windowID)
         if let overlay = dimOverlays.removeValue(forKey: windowID) {
             overlay.orderOut(nil)
         }
@@ -1226,6 +1258,56 @@ class WindowManager: WindowObserverDelegate {
         if let fid = focusedWindowID, let el = axElements[fid], let t = trackedWindows[fid] {
             AccessibilityBridge.focus(window: el, pid: t.pid)
         }
+    }
+
+    // MARK: - Force ProMotion 120Hz
+
+    private var proMotionWindow: NSWindow?
+    private var proMotionTimer: DispatchSourceTimer?
+
+    private func startDisplayLink() {
+        guard proMotionWindow == nil else { return }
+
+        // Create a tiny 1x1 transparent window that continuously redraws,
+        // forcing macOS ProMotion to stay at its max refresh rate (120Hz).
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.level = .floating
+        window.ignoresMouseEvents = true
+        window.hasShadow = false
+        window.alphaValue = 0.01  // Nearly invisible but still composited
+        window.collectionBehavior = [.stationary, .canJoinAllSpaces]
+
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        view.wantsLayer = true
+        window.contentView = view
+        window.orderFrontRegardless()
+        proMotionWindow = window
+
+        // Redraw the view at ~120fps to keep ProMotion active
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(8))  // ~120fps
+        timer.setEventHandler { [weak view] in
+            view?.layer?.setNeedsDisplay()
+        }
+        timer.resume()
+        proMotionTimer = timer
+
+        spaceyLog("ProMotion force enabled (120Hz keepalive)")
+    }
+
+    private func stopDisplayLink() {
+        proMotionTimer?.cancel()
+        proMotionTimer = nil
+        proMotionWindow?.orderOut(nil)
+        proMotionWindow = nil
+        spaceyLog("ProMotion force disabled")
     }
 
     // MARK: - Crash Recovery

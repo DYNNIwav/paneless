@@ -21,6 +21,9 @@ struct SpaceyConfig {
     // Use native macOS compositor tiling (no gaps support)
     var nativeAnimation: Bool = false
 
+    // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
+    var forceProMotion: Bool = false
+
     // Borders
     var border: BorderConfig = BorderConfig()
 
@@ -159,6 +162,7 @@ struct SpaceyConfig {
                 case "focus_follows_mouse": config.focusFollowsMouse = value == "true" || value == "1"
                 case "dim_unfocused": config.dimUnfocused = CGFloat(Double(value) ?? 0)
                 case "native_animation": config.nativeAnimation = value == "true" || value == "1"
+                case "force_promotion": config.forceProMotion = value == "true" || value == "1"
                 default: break
                 }
 
