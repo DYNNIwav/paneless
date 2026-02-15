@@ -52,6 +52,19 @@ func SLSDisableUpdate(_ cid: CGSConnectionID)
 @_silgen_name("SLSReenableUpdate")
 func SLSReenableUpdate(_ cid: CGSConnectionID)
 
+// GPU-composited window transform — applies visual-only affine transform.
+// Same API yabai uses for smooth animations: zero AX IPC per frame,
+// all visual work done by the compositor. Transform is relative to the
+// window's actual position (identity = no visual offset).
+@discardableResult
+@_silgen_name("SLSSetWindowTransform")
+func SLSSetWindowTransform(_ cid: CGSConnectionID, _ wid: CGWindowID, _ transform: CGAffineTransform) -> CGError
+
+// Move window position directly via compositor (faster than AX for position-only moves)
+@discardableResult
+@_silgen_name("CGSMoveWindow")
+func CGSMoveWindow(_ cid: CGSConnectionID, _ wid: CGWindowID, _ point: inout CGPoint) -> CGError
+
 // Private AXUIElement API to get CGWindowID from an AXUIElement
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: inout CGWindowID) -> AXError

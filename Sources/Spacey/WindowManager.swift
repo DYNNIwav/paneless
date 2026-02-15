@@ -71,6 +71,10 @@ class WindowManager: WindowObserverDelegate {
         // Check for orphaned hidden windows from a previous crash and restore them
         restoreOrphanedWindows()
 
+        // Reset any stale CGS transforms from a previous crash mid-animation
+        let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
+        Animator.shared.resetTransforms(for: allWindowIDs)
+
         // Initialize virtual workspace 1 with the scanned windows
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
