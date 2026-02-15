@@ -139,6 +139,15 @@ enum NativeTiling {
         switch count {
         case 1:
             let pad = singleWindowPadding
+            if pad == 0 {
+                // No padding: remove all gaps for true fullscreen feel
+                return [CGRect(
+                    x: region.x,
+                    y: region.y,
+                    width: max(region.width, 100),
+                    height: max(region.height, 100)
+                )]
+            }
             return [CGRect(
                 x: region.x + halfGap + pad,
                 y: region.y + halfGap + pad,

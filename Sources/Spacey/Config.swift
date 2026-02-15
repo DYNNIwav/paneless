@@ -38,6 +38,12 @@ struct SpaceyConfig {
     // Per-app layout rules (e.g. "Arc" -> "left", "Ghostty" -> "right")
     var appLayoutRules: [String: String] = [:]
 
+    // Per-app workspace assignment (e.g. "Slack" -> 3)
+    var appWorkspaceRules: [String: Int] = [:]
+
+    // Sticky apps (visible on ALL workspaces)
+    var stickyApps: Set<String> = []
+
     // Keybindings (populated from config or defaults)
     var keyBindings: [KeyBinding] = []
 
@@ -173,12 +179,20 @@ struct SpaceyConfig {
                 switch key {
                 case "float": config.floatApps = Set(apps)
                 case "exclude": config.excludeApps = Set(apps)
+                case "sticky": config.stickyApps = Set(apps)
                 default: break
                 }
 
             case "app_rules":
-                // e.g. "Arc = left", "Ghostty = right"
-                config.appLayoutRules[key] = value.lowercased()
+                // e.g. "Arc = left", "Ghostty = right", "Slack = workspace 3"
+                let lowerValue = value.lowercased()
+                if lowerValue.hasPrefix("workspace "),
+                   let n = Int(lowerValue.dropFirst("workspace ".count)),
+                   n >= 1, n <= 9 {
+                    config.appWorkspaceRules[key] = n
+                } else {
+                    config.appLayoutRules[key] = lowerValue
+                }
 
             case "bindings":
                 hasCustomBindings = true
@@ -205,6 +219,7 @@ struct SpaceyConfig {
         // Always add bundle IDs for reliable matching on localized systems.
         config.floatApps.formUnion(resolveBundleIDs(config.floatApps))
         config.excludeApps.formUnion(resolveBundleIDs(config.excludeApps))
+        config.stickyApps.formUnion(resolveBundleIDs(config.stickyApps))
 
         spaceyLog("Config loaded from \(configPath)")
         return config

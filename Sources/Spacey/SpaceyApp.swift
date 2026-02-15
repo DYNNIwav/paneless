@@ -34,6 +34,8 @@ private struct MenuBarTheme {
 class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var configWatcherSource: DispatchSourceFileSystemObject?
+    private var permissionCheckTimer: Timer?
+    private var accessibilityGranted = false
 
     // Tag for dynamic workspace menu items
     private let spaceMenuItemTag = 9000
@@ -49,12 +51,26 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
+        accessibilityGranted = trusted
+
         if !trusted {
             spaceyLog("Accessibility permission not yet granted. Prompting user.")
         }
 
         setupMenuBar()
 
+        if !accessibilityGranted {
+            // Show warning and start periodic re-check
+            updateStatusBarPermissionWarning()
+            startPermissionCheck()
+        } else {
+            startWindowManager()
+        }
+
+        spaceyLog("Ready")
+    }
+
+    private func startWindowManager() {
         WindowManager.shared.onSpaceChange = { [weak self] in
             self?.scheduleStatusBarUpdate()
         }
@@ -64,13 +80,40 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         WindowManager.shared.start()
         startConfigWatcher()
         updateStatusBar()
+    }
 
-        spaceyLog("Ready")
+    private func startPermissionCheck() {
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if AXIsProcessTrusted() {
+                self.accessibilityGranted = true
+                self.permissionCheckTimer?.invalidate()
+                self.permissionCheckTimer = nil
+                spaceyLog("Accessibility permission granted")
+                self.startWindowManager()
+            }
+        }
+    }
+
+    private func updateStatusBarPermissionWarning() {
+        guard let button = statusItem?.button else { return }
+        let warningStr = NSMutableAttributedString()
+        warningStr.append(NSAttributedString(string: "S ", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+        ]))
+        warningStr.append(NSAttributedString(string: "No Permission", attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.systemRed
+        ]))
+        button.attributedTitle = warningStr
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        permissionCheckTimer?.invalidate()
         configWatcherSource?.cancel()
-        WindowManager.shared.stop()
+        if accessibilityGranted {
+            WindowManager.shared.stop()
+        }
     }
 
     // MARK: - Config File Watcher
@@ -134,6 +177,13 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         // Static items below:
 
         menu.addItem(NSMenuItem.separator())
+
+        if !accessibilityGranted {
+            let permItem = NSMenuItem(title: "Grant Accessibility Permission...", action: #selector(openAccessibilitySettings(_:)), keyEquivalent: "")
+            permItem.target = self
+            menu.addItem(permItem)
+            menu.addItem(NSMenuItem.separator())
+        }
 
         let retileItem = NSMenuItem(title: "Retile", action: #selector(retile(_:)), keyEquivalent: "")
         retileItem.target = self
@@ -297,6 +347,12 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
+    }
+
+    @objc private func openAccessibilitySettings(_ sender: NSMenuItem) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func quit(_ sender: NSMenuItem) {

@@ -58,16 +58,18 @@ class WorkspaceManager {
 
     /// Switch workspace: hide old windows, activate new workspace, show new windows.
     /// Uses SLSDisableUpdate/SLSReenableUpdate to batch all moves atomically.
-    func switchWorkspace(to number: Int, on monitorID: String, screenFrame: CGRect) {
+    /// Sticky windows are excluded from hiding — they remain visible across all workspaces.
+    func switchWorkspace(to number: Int, on monitorID: String, screenFrame: CGRect, stickyWindows: Set<CGWindowID> = []) {
         let oldNumber = activeWorkspace[monitorID] ?? 1
         let conn = CGSMainConnectionID()
 
         // Batch all window moves — no redraws until SLSReenableUpdate
         SLSDisableUpdate(conn)
 
-        // Hide windows on old workspace
+        // Hide windows on old workspace (skip sticky windows)
         if let oldWS = workspaces[monitorID]?[oldNumber] {
             for wid in oldWS.trackedWindows.keys {
+                guard !stickyWindows.contains(wid) else { continue }
                 hideWindow(wid, element: oldWS.axElements[wid], screenFrame: screenFrame)
             }
         }

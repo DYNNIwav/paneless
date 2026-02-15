@@ -15,6 +15,7 @@ class WindowManager: WindowObserverDelegate {
     var axElements: [CGWindowID: AXUIElement] = [:]
     var floatingWindows: Set<CGWindowID> = []
     var fullscreenWindows: Set<CGWindowID> = []
+    var stickyWindows: Set<CGWindowID> = []
     var focusedWindowID: CGWindowID?
 
     private var mouseMonitor: Any?
@@ -46,12 +47,18 @@ class WindowManager: WindowObserverDelegate {
 
         scanCurrentSpace()
 
+        // Check for orphaned hidden windows from a previous crash and restore them
+        restoreOrphanedWindows()
+
         // Initialize virtual workspace 1 with the scanned windows
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         WorkspaceManager.shared.activeWorkspace[monitorID] = 1
         saveWorkspaceState(workspace: 1, monitor: monitorID)
         spaceyLog("Initialized workspace 1 on \(monitorID) with \(layoutEngine.tiledWindows.count) tiled windows")
+
+        // Restore windows to their saved workspaces from a previous session
+        WorkspacePersistence.restoreWorkspaceAssignments()
 
         // Smart retile on display change (monitor connected/disconnected/resolution change)
         NotificationCenter.default.addObserver(
@@ -73,6 +80,13 @@ class WindowManager: WindowObserverDelegate {
     }
 
     func stop() {
+        // Save workspace state before shutting down
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
+        saveWorkspaceState(workspace: currentWS, monitor: monitorID)
+        WorkspacePersistence.saveImmediate()
+
         Animator.shared.cancelAll()
         BorderManager.shared.removeAll()
         removeDimOverlays()
@@ -466,6 +480,7 @@ class WindowManager: WindowObserverDelegate {
         axElements.removeAll()
         floatingWindows.removeAll()
         fullscreenWindows.removeAll()
+        stickyWindows.removeAll()
 
         let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
         let hiddenIDs = WorkspaceManager.shared.allHiddenWindowIDs()
@@ -503,6 +518,11 @@ class WindowManager: WindowObserverDelegate {
                 if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
                     shouldFloat = true
                 }
+            }
+
+            // Mark as sticky if app matches sticky rules
+            if appMatchesRule(info.appName, bundleID: info.bundleID, rules: config.stickyApps) {
+                stickyWindows.insert(windowID)
             }
 
             if shouldFloat {
@@ -578,6 +598,51 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
+        // Mark as sticky if app matches sticky rules
+        if appMatchesRule(appName, bundleID: bundleID, rules: config.stickyApps) {
+            stickyWindows.insert(windowID)
+        }
+
+        // Per-app workspace assignment: auto-move to specified workspace
+        let targetWorkspace = config.appWorkspaceRules[appName]
+            ?? (bundleID.flatMap { config.appWorkspaceRules[$0] })
+        if let target = targetWorkspace {
+            let screen = NSScreen.main ?? NSScreen.screens.first!
+            let monitorID = WorkspaceManager.shared.screenID(for: screen)
+            let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
+            if target != currentWS {
+                // Move directly to target workspace without showing on current
+                let screenFrame = screenFrameInAX(for: screen)
+                if let element = axElements[windowID] {
+                    WorkspaceManager.shared.hideWindow(windowID, element: element, screenFrame: screenFrame)
+                }
+
+                var targetWS = WorkspaceManager.shared.workspaces[monitorID]?[target] ?? VirtualWorkspace()
+                targetWS.trackedWindows[windowID] = tracked
+                if let element = axElements[windowID] {
+                    targetWS.axElements[windowID] = element
+                }
+                if shouldFloat {
+                    targetWS.floatingWindows.insert(windowID)
+                } else {
+                    targetWS.tiledWindows.append(windowID)
+                }
+                WorkspaceManager.shared.workspaces[monitorID, default: [:]][target] = targetWS
+
+                // Remove from current workspace tracking
+                trackedWindows.removeValue(forKey: windowID)
+                axElements.removeValue(forKey: windowID)
+
+                // Update observer to know about this hidden window
+                var known = observer.currentKnownWindows
+                known.insert(windowID)
+                observer.syncKnownWindows(known)
+
+                spaceyLog("Auto-moved \(appName) (\(windowID)) to workspace \(target)")
+                return
+            }
+        }
+
         if shouldFloat {
             floatingWindows.insert(windowID)
         } else if let element = axElements[windowID] {
@@ -598,15 +663,23 @@ class WindowManager: WindowObserverDelegate {
                 }
             }
 
-            // Pre-position the new window at its target frame BEFORE retile() to
-            // prevent the flash where it briefly appears at the macOS default position.
-            // Use SLSDisableUpdate to make the snap invisible.
+            // Pre-position the new window slightly offset from its target frame BEFORE
+            // retile() to prevent the flash where it briefly appears at the macOS default
+            // position. The offset creates a subtle slide-in animation when retile()
+            // moves it to the correct position via the Animator.
             let region = getTilingRegion()
             let layouts = layoutEngine.calculateFrames(in: region)
             if let targetFrame = layouts.first(where: { $0.0 == windowID })?.1 {
+                let slideOffset: CGFloat = 20
+                let preFrame = CGRect(
+                    x: targetFrame.origin.x + slideOffset,
+                    y: targetFrame.origin.y,
+                    width: targetFrame.width - slideOffset,
+                    height: targetFrame.height
+                )
                 let conn = CGSMainConnectionID()
                 SLSDisableUpdate(conn)
-                AccessibilityBridge.setFrame(of: element, to: targetFrame)
+                AccessibilityBridge.setFrame(of: element, to: preFrame)
                 SLSReenableUpdate(conn)
             }
 
@@ -629,6 +702,7 @@ class WindowManager: WindowObserverDelegate {
         axElements.removeValue(forKey: windowID)
         floatingWindows.remove(windowID)
         fullscreenWindows.remove(windowID)
+        stickyWindows.remove(windowID)
         if let overlay = dimOverlays.removeValue(forKey: windowID) {
             overlay.orderOut(nil)
         }
@@ -955,6 +1029,10 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
+        // Pause observer to prevent race conditions during workspace switch
+        observer.pause()
+        defer { observer.resume() }
+
         let screenFrame = screenFrameInAX(for: screen)
 
         // Remove dim overlays before switching (they reference old workspace windows)
@@ -964,7 +1042,8 @@ class WindowManager: WindowObserverDelegate {
         saveWorkspaceState(workspace: currentWS, monitor: monitorID)
 
         // Switch: hides old windows (moves off-screen), activates new workspace number
-        WorkspaceManager.shared.switchWorkspace(to: number, on: monitorID, screenFrame: screenFrame)
+        // Sticky windows are excluded from hiding — they stay visible on all workspaces
+        WorkspaceManager.shared.switchWorkspace(to: number, on: monitorID, screenFrame: screenFrame, stickyWindows: stickyWindows)
 
         // Load new workspace state
         loadWorkspaceState(workspace: number, monitor: monitorID)
@@ -982,6 +1061,12 @@ class WindowManager: WindowObserverDelegate {
     private func moveToVirtualWorkspace(_ number: Int) {
         guard number >= 1 && number <= 9 else { return }
         guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+
+        // Sticky windows cannot be moved to a specific workspace (they're on all)
+        guard !stickyWindows.contains(windowID) else {
+            spaceyLog("Cannot move sticky window to workspace — it's visible on all workspaces")
+            return
+        }
 
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
@@ -1062,6 +1147,9 @@ class WindowManager: WindowObserverDelegate {
         ws.layoutVariant = layoutEngine.layoutVariant
         ws.splitRatio = layoutEngine.splitRatio
         WorkspaceManager.shared.workspaces[monitor, default: [:]][workspace] = ws
+
+        // Persist to disk (debounced)
+        WorkspacePersistence.save()
     }
 
     /// Restore floating and fullscreen windows to their saved positions after workspace switch.
@@ -1086,6 +1174,12 @@ class WindowManager: WindowObserverDelegate {
         // doesn't re-discover hidden windows as "new" on every poll cycle
         let hiddenIDs = WorkspaceManager.shared.allHiddenWindowIDs()
 
+        // Preserve sticky windows from the previous workspace so they carry forward
+        let previousStickyTracked = trackedWindows.filter { stickyWindows.contains($0.key) }
+        let previousStickyElements = axElements.filter { stickyWindows.contains($0.key) }
+        let previousStickyFloating = floatingWindows.intersection(stickyWindows)
+        let previousStickyTiled = layoutEngine.tiledWindows.filter { stickyWindows.contains($0) }
+
         if let ws = WorkspaceManager.shared.workspaces[monitor]?[workspace] {
             layoutEngine.tiledWindows = ws.tiledWindows
             trackedWindows = ws.trackedWindows
@@ -1109,16 +1203,58 @@ class WindowManager: WindowObserverDelegate {
             observer.syncKnownWindows(hiddenIDs)
         }
 
+        // Merge sticky windows into the new workspace state
+        for (wid, tracked) in previousStickyTracked {
+            trackedWindows[wid] = tracked
+        }
+        for (wid, element) in previousStickyElements {
+            axElements[wid] = element
+        }
+        floatingWindows.formUnion(previousStickyFloating)
+        for wid in previousStickyTiled {
+            if !layoutEngine.tiledWindows.contains(wid) {
+                layoutEngine.insert(windowID: wid, afterFocused: nil)
+            }
+        }
+
+        // Ensure sticky windows are included in known windows
+        var currentKnown = observer.currentKnownWindows
+        currentKnown.formUnion(stickyWindows)
+        observer.syncKnownWindows(currentKnown)
+
         // Focus the workspace's focused window
         if let fid = focusedWindowID, let el = axElements[fid], let t = trackedWindows[fid] {
             AccessibilityBridge.focus(window: el, pid: t.pid)
         }
     }
 
+    // MARK: - Crash Recovery
+
+    /// On launch, check for windows stuck at hidden positions (from a previous crash)
+    /// and move them back on-screen.
+    private func restoreOrphanedWindows() {
+        let allWindows = SpaceManager.getWindowsOnCurrentSpace()
+        for screen in NSScreen.screens {
+            let screenFrame = screenFrameInAX(for: screen)
+            for wid in allWindows {
+                guard let info = SpaceManager.getWindowInfo(wid) else { continue }
+                if WorkspaceManager.shared.isHiddenPosition(screenFrame: screenFrame, windowFrame: info.frame) {
+                    if let (element, _) = AccessibilityBridge.getWindows(for: info.pid).first(where: { $0.1 == wid }) {
+                        let centerX = screenFrame.origin.x + screenFrame.width / 4
+                        let centerY = screenFrame.origin.y + screenFrame.height / 4
+                        let restoredFrame = CGRect(x: centerX, y: centerY, width: info.frame.width, height: info.frame.height)
+                        AccessibilityBridge.setFrame(of: element, to: restoredFrame)
+                        spaceyLog("Restored orphaned window \(wid) (\(info.appName)) from hidden position")
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     /// Convert NSScreen frame to AX/Core Graphics coordinates (origin top-left of primary display)
-    private func screenFrameInAX(for screen: NSScreen) -> CGRect {
+    func screenFrameInAX(for screen: NSScreen) -> CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let axY = primaryHeight - screen.frame.origin.y - screen.frame.height
         return CGRect(x: screen.frame.origin.x, y: axY, width: screen.frame.width, height: screen.frame.height)

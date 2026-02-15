@@ -20,6 +20,15 @@ class WindowObserver {
     private var burstTimer: Timer?
     private var burstEndTime: Date?
 
+    /// Pause/resume support to prevent race conditions during workspace switching
+    private(set) var isPaused = false
+
+    func pause() { isPaused = true }
+    func resume() {
+        isPaused = false
+        pollWindows()
+    }
+
     // Adaptive polling state
     private var lastChangeTime: Date = Date()
     private var currentPollInterval: TimeInterval = 0.5
@@ -146,6 +155,7 @@ class WindowObserver {
     // MARK: - Polling
 
     private func pollWindows() {
+        guard !isPaused else { return }
         let currentWindows = Set(SpaceManager.getWindowsOnCurrentSpace())
 
         let newWindows = currentWindows.subtracting(knownWindows)
@@ -215,6 +225,9 @@ private func axObserverCallback(
     let notifName = notification as String
 
     DispatchQueue.main.async {
+        // Skip all processing while paused (during workspace switching)
+        guard !windowObserver.isPaused else { return }
+
         // Allow focus events through even during space transitions.
         // focusChanged() validates the window is tracked on the current space,
         // and doesn't call app.activate(), so it can't cause space-switching loops.
@@ -225,6 +238,5 @@ private func axObserverCallback(
         }
 
         windowObserver.triggerPoll()
-        windowObserver.startBurstPolling(duration: 0.5)
     }
 }
