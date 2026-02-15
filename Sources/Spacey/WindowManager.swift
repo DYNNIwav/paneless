@@ -22,6 +22,8 @@ class WindowManager: WindowObserverDelegate {
     private var lastMouseFocusTime: Date = .distantPast
     private var dimmedWindows: Set<CGWindowID> = []
     private var dimOverlays: [CGWindowID: NSWindow] = [:]
+    private var clickMonitor: Any?
+    private var clickDimWorkItem: DispatchWorkItem?
     private var resizeMonitor: Any?
     private var isResizing = false
     private var resizeStartPos: CGFloat = 0
@@ -73,6 +75,9 @@ class WindowManager: WindowObserverDelegate {
         if config.focusFollowsMouse {
             startFocusFollowsMouse()
         }
+
+        // Global click monitor to refresh dimming after macOS finishes window activation
+        setupClickMonitor()
 
         // Mouse drag resize between tiled windows
         setupResizeMonitor()
@@ -165,6 +170,7 @@ class WindowManager: WindowObserverDelegate {
             focusedWindowID = neighborID
             updateBorders(layouts: layouts)
             updateDimming(layouts: layouts)
+            onFocusChange?()
         }
     }
 
@@ -190,6 +196,7 @@ class WindowManager: WindowObserverDelegate {
             let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
             updateBorders(layouts: layouts)
             updateDimming(layouts: layouts)
+            onFocusChange?()
         }
     }
 
@@ -764,12 +771,24 @@ class WindowManager: WindowObserverDelegate {
     func focusChanged() {
         guard let newFocusedID = AccessibilityBridge.getFocusedWindowID(),
               newFocusedID != focusedWindowID,
-              // Only update if the newly focused window is one we're tracking on this space.
-              // This check is sufficient to prevent stale focus events from other spaces —
-              // after space change, trackedWindows only contains windows for the current space.
               trackedWindows[newFocusedID] != nil
         else { return }
+        applyFocusChange(newFocusedID)
+    }
 
+    func focusChanged(windowID: CGWindowID) {
+        guard windowID != focusedWindowID,
+              trackedWindows[windowID] != nil
+        else {
+            // Fallback: the notification element might be an app ref, not a window.
+            // Try the old NSWorkspace path.
+            focusChanged()
+            return
+        }
+        applyFocusChange(windowID)
+    }
+
+    private func applyFocusChange(_ newFocusedID: CGWindowID) {
         focusedWindowID = newFocusedID
         let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
         updateBorders(layouts: layouts)
@@ -810,6 +829,35 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.splitRatio = max(0.2, min(0.8, layoutEngine.splitRatio + delta))
         spaceyLog("Split ratio: \(layoutEngine.splitRatio)")
         retile()
+    }
+
+    // MARK: - Click-to-Focus Dimming Refresh
+
+    private func setupClickMonitor() {
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            guard let self = self else { return }
+            // Cancel any pending refresh
+            self.clickDimWorkItem?.cancel()
+            // After a mouse click, macOS activates the target window and reshuffles z-order
+            // asynchronously. Wait for that to settle, then re-query focus and refresh dimming.
+            let work = DispatchWorkItem { [weak self] in
+                self?.refreshFocusAndDimming()
+            }
+            self.clickDimWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+        }
+    }
+
+    private func refreshFocusAndDimming() {
+        guard let newFocusedID = AccessibilityBridge.getFocusedWindowID(),
+              trackedWindows[newFocusedID] != nil
+        else { return }
+        let changed = newFocusedID != focusedWindowID
+        focusedWindowID = newFocusedID
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+        updateBorders(layouts: layouts)
+        updateDimming(layouts: layouts)
+        if changed { onFocusChange?() }
     }
 
     // MARK: - Mouse Drag Resize
@@ -953,6 +1001,8 @@ class WindowManager: WindowObserverDelegate {
 
     // MARK: - Dim Unfocused Windows (Rounded Overlay + CGSOrderWindow)
 
+    private var dimReorderWorkItem: DispatchWorkItem?
+
     private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
         let dimAmount = config.dimUnfocused
         guard dimAmount > 0 else { restoreAllDimming(); return }
@@ -997,6 +1047,21 @@ class WindowManager: WindowObserverDelegate {
             }
             dimmedWindows.insert(wid)
         }
+
+        // Schedule a delayed re-order pass. When macOS activates a window via mouse click,
+        // it shuffles z-order asynchronously and can undo our CGSOrderWindow calls.
+        // Re-applying after a short delay catches this.
+        dimReorderWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let c = CGSMainConnectionID()
+            for (wid, overlay) in self.dimOverlays {
+                let oid = CGWindowID(overlay.windowNumber)
+                CGSOrderWindow(c, oid, 1, wid)
+            }
+        }
+        dimReorderWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: workItem)
     }
 
     private func restoreAllDimming() {

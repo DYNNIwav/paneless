@@ -5,6 +5,7 @@ protocol WindowObserverDelegate: AnyObject {
     func windowDestroyed(windowID: CGWindowID)
     func spaceChanged()
     func focusChanged()
+    func focusChanged(windowID: CGWindowID)
     func applicationLaunched(pid: pid_t, name: String)
     func applicationTerminated(pid: pid_t, name: String)
 }
@@ -224,17 +225,26 @@ private func axObserverCallback(
     let windowObserver = Unmanaged<WindowObserver>.fromOpaque(userData).takeUnretainedValue()
     let notifName = notification as String
 
+    // Extract window ID from the notification element immediately (before async dispatch)
+    // so we don't lose it to a race condition with NSWorkspace.frontmostApplication
+    var notifWindowID: CGWindowID = 0
+    if notifName == kAXFocusedWindowChangedNotification as String {
+        _ = _AXUIElementGetWindow(element, &notifWindowID)
+    }
+
     DispatchQueue.main.async {
         // Skip all processing while paused (during workspace switching)
         guard !windowObserver.isPaused else { return }
 
-        // Allow focus events through even during space transitions.
-        // focusChanged() validates the window is tracked on the current space,
-        // and doesn't call app.activate(), so it can't cause space-switching loops.
-        // Suppressing focus events for 1 second made clicking/keybinds unresponsive
-        // after space changes.
+        // Pass the window ID directly from the AX notification element.
+        // This avoids a race where NSWorkspace.frontmostApplication hasn't
+        // updated yet when the user clicks a window with the mouse.
         if notifName == kAXFocusedWindowChangedNotification as String {
-            windowObserver.delegate?.focusChanged()
+            if notifWindowID != 0 {
+                windowObserver.delegate?.focusChanged(windowID: notifWindowID)
+            } else {
+                windowObserver.delegate?.focusChanged()
+            }
         }
 
         windowObserver.triggerPoll()
