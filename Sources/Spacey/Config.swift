@@ -192,6 +192,16 @@ struct SpaceyConfig {
 
         config.keyBindings = hasCustomBindings ? customBindings : defaultKeyBindings()
 
+        // Always add workspace bindings (Alt+1-9 switch, Alt+Shift+1-9 move)
+        // even with custom bindings — these are fundamental to virtual workspaces
+        let existingKeyCodes = Set(config.keyBindings.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
+        for binding in workspaceKeyBindings() {
+            let key = "\(binding.modifiers.rawValue)-\(binding.keyCode)"
+            if !existingKeyCodes.contains(key) {
+                config.keyBindings.append(binding)
+            }
+        }
+
         // Always add bundle IDs for reliable matching on localized systems.
         config.floatApps.formUnion(resolveBundleIDs(config.floatApps))
         config.excludeApps.formUnion(resolveBundleIDs(config.excludeApps))
@@ -223,6 +233,20 @@ struct SpaceyConfig {
             }
         }
         return result
+    }
+
+    /// Workspace keybindings — always added, even with custom [bindings] section
+    private static func workspaceKeyBindings() -> [KeyBinding] {
+        var bindings: [KeyBinding] = []
+        let alt: CGEventFlags = [.maskAlternate]
+        let altShift: CGEventFlags = [.maskAlternate, .maskShift]
+        for n in 1...9 {
+            if let code = KeyNames.keyCode(for: "\(n)") {
+                bindings.append(KeyBinding(modifiers: alt, keyCode: code, action: .switchWorkspace(n)))
+                bindings.append(KeyBinding(modifiers: altShift, keyCode: code, action: .moveToWorkspace(n)))
+            }
+        }
+        return bindings
     }
 
     // MARK: - Binding Parser

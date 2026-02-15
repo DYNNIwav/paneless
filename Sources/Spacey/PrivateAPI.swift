@@ -1,7 +1,7 @@
 import Cocoa
 
-// MARK: - Private CGS API Declarations
-// These are the same private APIs used by Amethyst/yabai.
+// MARK: - Private CGS/SLS API Declarations
+// These are the same private APIs used by Amethyst/yabai/rift.
 // They work on macOS Sequoia without SIP disabled.
 
 @_silgen_name("CGSMainConnectionID")
@@ -33,10 +33,24 @@ func CGSHideSpaces(_ conn: CGSConnectionID, _ spaces: CFArray)
 @_silgen_name("CGSCopyManagedDisplayForSpace")
 func CGSCopyManagedDisplayForSpace(_ conn: CGSConnectionID, _ space: CGSSpaceID) -> CFString
 
-// Window alpha (direct opacity without overlays)
+// Window alpha — only works on windows owned by the calling process (our overlays)
+// NOTE: The C API uses `float` (32-bit), NOT CGFloat/Double (64-bit on ARM64)
 @discardableResult
 @_silgen_name("CGSSetWindowAlpha")
-func CGSSetWindowAlpha(_ cid: CGSConnectionID, _ wid: CGWindowID, _ alpha: CGFloat) -> CGError
+func CGSSetWindowAlpha(_ cid: CGSConnectionID, _ wid: CGWindowID, _ alpha: Float) -> CGError
+
+// Window z-ordering — order OUR window relative to ANY window
+// order: 1 = above, -1 = below, 0 = out (hide)
+@discardableResult
+@_silgen_name("CGSOrderWindow")
+func CGSOrderWindow(_ cid: CGSConnectionID, _ wid: CGWindowID, _ order: Int32, _ relativeToWid: CGWindowID) -> CGError
+
+// Display update batching — suppress redraws during bulk window moves
+@_silgen_name("SLSDisableUpdate")
+func SLSDisableUpdate(_ cid: CGSConnectionID)
+
+@_silgen_name("SLSReenableUpdate")
+func SLSReenableUpdate(_ cid: CGSConnectionID)
 
 // Private AXUIElement API to get CGWindowID from an AXUIElement
 @_silgen_name("_AXUIElementGetWindow")

@@ -19,7 +19,7 @@ class WindowManager: WindowObserverDelegate {
 
     private var mouseMonitor: Any?
     private var lastMouseFocusTime: Date = .distantPast
-    private var dimmedWindows: Set<CGWindowID> = []
+    private var dimOverlays: [CGWindowID: NSWindow] = [:]
     private var resizeMonitor: Any?
     private var isResizing = false
     private var resizeStartPos: CGFloat = 0
@@ -46,6 +46,13 @@ class WindowManager: WindowObserverDelegate {
 
         scanCurrentSpace()
 
+        // Initialize virtual workspace 1 with the scanned windows
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        WorkspaceManager.shared.activeWorkspace[monitorID] = 1
+        saveWorkspaceState(workspace: 1, monitor: monitorID)
+        spaceyLog("Initialized workspace 1 on \(monitorID) with \(layoutEngine.tiledWindows.count) tiled windows")
+
         // Smart retile on display change (monitor connected/disconnected/resolution change)
         NotificationCenter.default.addObserver(
             self,
@@ -68,7 +75,7 @@ class WindowManager: WindowObserverDelegate {
     func stop() {
         Animator.shared.cancelAll()
         BorderManager.shared.removeAll()
-        restoreAllWindowAlpha()
+        removeDimOverlays()
         stopFocusFollowsMouse()
         stopResizeMonitor()
         NotificationCenter.default.removeObserver(self)
@@ -362,7 +369,7 @@ class WindowManager: WindowObserverDelegate {
 
         // Update dimming
         if config.dimUnfocused <= 0 {
-            restoreAllWindowAlpha()
+            removeDimOverlays()
         }
 
         scanCurrentSpace()
@@ -460,8 +467,13 @@ class WindowManager: WindowObserverDelegate {
         floatingWindows.removeAll()
         fullscreenWindows.removeAll()
 
-        let windowIDs = SpaceManager.getWindowsOnCurrentSpace()
-        observer.syncKnownWindows(Set(windowIDs))
+        let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
+        let hiddenIDs = WorkspaceManager.shared.allHiddenWindowIDs()
+        let windowIDs = allWindowIDs.filter { !hiddenIDs.contains($0) }
+        // Known windows = active workspace windows + hidden windows (so hidden aren't re-discovered)
+        var allKnown = Set(allWindowIDs)
+        allKnown.formUnion(hiddenIDs)
+        observer.syncKnownWindows(allKnown)
 
         for windowID in windowIDs {
             guard let info = SpaceManager.getWindowInfo(windowID) else { continue }
@@ -510,6 +522,8 @@ class WindowManager: WindowObserverDelegate {
 
     func windowCreated(windowID: CGWindowID, pid: pid_t, appName: String) {
         guard trackedWindows[windowID] == nil else { return }
+        // Skip windows hidden on other virtual workspaces
+        guard !WorkspaceManager.shared.isWindowHiddenOnOtherWorkspace(windowID) else { return }
         let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
         guard !appMatchesRule(appName, bundleID: bundleID, rules: config.excludeApps) else { return }
 
@@ -566,7 +580,7 @@ class WindowManager: WindowObserverDelegate {
 
         if shouldFloat {
             floatingWindows.insert(windowID)
-        } else if axElements[windowID] != nil {
+        } else if let element = axElements[windowID] {
             layoutEngine.insert(windowID: windowID, afterFocused: focusedWindowID)
 
             // Apply per-app layout rules (e.g. "Arc = left" puts Arc at index 0)
@@ -582,6 +596,18 @@ class WindowManager: WindowObserverDelegate {
                     layoutEngine.tiledWindows.append(windowID)
                 default: break
                 }
+            }
+
+            // Pre-position the new window at its target frame BEFORE retile() to
+            // prevent the flash where it briefly appears at the macOS default position.
+            // Use SLSDisableUpdate to make the snap invisible.
+            let region = getTilingRegion()
+            let layouts = layoutEngine.calculateFrames(in: region)
+            if let targetFrame = layouts.first(where: { $0.0 == windowID })?.1 {
+                let conn = CGSMainConnectionID()
+                SLSDisableUpdate(conn)
+                AccessibilityBridge.setFrame(of: element, to: targetFrame)
+                SLSReenableUpdate(conn)
             }
 
             // macOS gives focus to newly created windows, so update our tracking
@@ -603,7 +629,9 @@ class WindowManager: WindowObserverDelegate {
         axElements.removeValue(forKey: windowID)
         floatingWindows.remove(windowID)
         fullscreenWindows.remove(windowID)
-        dimmedWindows.remove(windowID)
+        if let overlay = dimOverlays.removeValue(forKey: windowID) {
+            overlay.orderOut(nil)
+        }
 
         let wasTiled = layoutEngine.contains(windowID)
         if wasTiled {
@@ -834,40 +862,83 @@ class WindowManager: WindowObserverDelegate {
         }
     }
 
-    // MARK: - Dim Unfocused Windows (CGSSetWindowAlpha)
+    // MARK: - Dim Unfocused Windows (Overlay + CGSOrderWindow)
 
     private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
         let dimAmount = config.dimUnfocused
-        guard dimAmount > 0 else { restoreAllWindowAlpha(); return }
+        guard dimAmount > 0 else { removeDimOverlays(); return }
 
         let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
         let conn = CGSMainConnectionID()
-        let dimAlpha = CGFloat(1.0 - dimAmount)  // 0.3 config → 0.7 window alpha
-
-        // Restore windows no longer tiled or now focused
         let tiledSet = Set(layoutEngine.tiledWindows)
-        for wid in dimmedWindows where !tiledSet.contains(wid) || wid == focusedID {
-            CGSSetWindowAlpha(conn, wid, 1.0)
-        }
+        let currentLayouts = layouts ?? layoutEngine.calculateFrames(in: getTilingRegion())
 
-        // Apply dim to unfocused, full opacity to focused
-        var newDimmed = Set<CGWindowID>()
-        for wid in layoutEngine.tiledWindows {
-            if wid == focusedID {
-                CGSSetWindowAlpha(conn, wid, 1.0)
-            } else {
-                CGSSetWindowAlpha(conn, wid, dimAlpha)
-                newDimmed.insert(wid)
+        // Remove overlays for windows no longer tiled or now focused
+        for wid in Array(dimOverlays.keys) {
+            if !tiledSet.contains(wid) || wid == focusedID {
+                dimOverlays.removeValue(forKey: wid)?.orderOut(nil)
             }
         }
-        dimmedWindows = newDimmed
+
+        // Create/update overlays for unfocused tiled windows
+        for (wid, frame) in currentLayouts {
+            if wid == focusedID {
+                dimOverlays.removeValue(forKey: wid)?.orderOut(nil)
+                continue
+            }
+
+            let cocoaFrame = axToCocoaFrame(frame)
+            if let overlay = dimOverlays[wid] {
+                overlay.setFrame(cocoaFrame, display: true)
+            } else {
+                let overlay = makeDimOverlay(frame: cocoaFrame, alpha: dimAmount)
+                dimOverlays[wid] = overlay
+            }
+
+            // Z-order: place overlay directly above target window
+            if let overlay = dimOverlays[wid] {
+                let overlayWid = CGWindowID(overlay.windowNumber)
+                CGSOrderWindow(conn, overlayWid, 1, wid)
+            }
+        }
     }
 
-    private func restoreAllWindowAlpha() {
-        guard !dimmedWindows.isEmpty else { return }
-        let conn = CGSMainConnectionID()
-        for wid in dimmedWindows { CGSSetWindowAlpha(conn, wid, 1.0) }
-        dimmedWindows.removeAll()
+    private func removeDimOverlays() {
+        guard !dimOverlays.isEmpty else { return }
+        for (_, overlay) in dimOverlays {
+            overlay.orderOut(nil)
+        }
+        dimOverlays.removeAll()
+    }
+
+    private func makeDimOverlay(frame: NSRect, alpha: CGFloat) -> NSWindow {
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = NSColor.black.withAlphaComponent(alpha)
+        window.level = .normal
+        window.ignoresMouseEvents = true
+        window.hasShadow = false
+        window.collectionBehavior = [.stationary]
+        window.orderFrontRegardless()
+        return window
+    }
+
+    private func axToCocoaFrame(_ axFrame: CGRect) -> NSRect {
+        guard let primaryScreen = NSScreen.screens.first else {
+            return NSRect(origin: .zero, size: axFrame.size)
+        }
+        let screenHeight = primaryScreen.frame.height
+        return NSRect(
+            x: axFrame.origin.x,
+            y: screenHeight - axFrame.origin.y - axFrame.size.height,
+            width: axFrame.size.width,
+            height: axFrame.size.height
+        )
     }
 
     // MARK: - Virtual Workspace Switching
@@ -884,16 +955,26 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
+        let screenFrame = screenFrameInAX(for: screen)
+
+        // Remove dim overlays before switching (they reference old workspace windows)
+        removeDimOverlays()
+
         // Save current state into WorkspaceManager
         saveWorkspaceState(workspace: currentWS, monitor: monitorID)
 
-        // Switch: hides old windows, shows new windows
-        WorkspaceManager.shared.switchWorkspace(to: number, on: monitorID)
+        // Switch: hides old windows (moves off-screen), activates new workspace number
+        WorkspaceManager.shared.switchWorkspace(to: number, on: monitorID, screenFrame: screenFrame)
 
         // Load new workspace state
         loadWorkspaceState(workspace: number, monitor: monitorID)
 
         retile()
+
+        // Restore floating/fullscreen windows to their saved positions
+        // (retile only handles tiled windows; floating windows need explicit restoration)
+        restoreFloatingWindowPositions()
+
         onSpaceChange?()
         spaceyLog("Switched to workspace \(number) on \(monitorID)")
     }
@@ -919,14 +1000,13 @@ class WindowManager: WindowObserverDelegate {
         let element = axElements.removeValue(forKey: windowID)
         let wasFloating = floatingWindows.remove(windowID) != nil
         let wasFullscreen = fullscreenWindows.remove(windowID) != nil
-        dimmedWindows.remove(windowID)
-
-        // Hide the window (move off-screen + alpha 0)
-        if let element = element {
-            AccessibilityBridge.setFrame(of: element, to: CGRect(x: 10000, y: 10000, width: 1, height: 1))
+        if let overlay = dimOverlays.removeValue(forKey: windowID) {
+            overlay.orderOut(nil)
         }
-        let conn = CGSMainConnectionID()
-        CGSSetWindowAlpha(conn, windowID, 0)
+
+        // Hide the window (move off-screen)
+        let screenFrame = screenFrameInAX(for: screen)
+        WorkspaceManager.shared.hideWindow(windowID, element: element, screenFrame: screenFrame)
 
         // Add to target workspace in WorkspaceManager
         var targetWS = WorkspaceManager.shared.workspaces[monitorID]?[number] ?? VirtualWorkspace()
@@ -959,6 +1039,19 @@ class WindowManager: WindowObserverDelegate {
     }
 
     private func saveWorkspaceState(workspace: Int, monitor: String) {
+        // Snapshot current floating window positions before saving
+        for wid in floatingWindows {
+            if let element = axElements[wid], let frame = AccessibilityBridge.getFrame(of: element) {
+                trackedWindows[wid]?.frame = frame
+            }
+        }
+        // Also snapshot fullscreen window positions
+        for wid in fullscreenWindows {
+            if let element = axElements[wid], let frame = AccessibilityBridge.getFrame(of: element) {
+                trackedWindows[wid]?.frame = frame
+            }
+        }
+
         var ws = VirtualWorkspace()
         ws.tiledWindows = layoutEngine.tiledWindows
         ws.floatingWindows = floatingWindows
@@ -971,7 +1064,28 @@ class WindowManager: WindowObserverDelegate {
         WorkspaceManager.shared.workspaces[monitor, default: [:]][workspace] = ws
     }
 
+    /// Restore floating and fullscreen windows to their saved positions after workspace switch.
+    /// Tiled windows are handled by retile(); this handles non-tiled windows.
+    private func restoreFloatingWindowPositions() {
+        for wid in floatingWindows {
+            guard let element = axElements[wid],
+                  let tracked = trackedWindows[wid],
+                  tracked.frame != .zero else { continue }
+            AccessibilityBridge.setFrame(of: element, to: tracked.frame)
+        }
+        for wid in fullscreenWindows {
+            guard let element = axElements[wid],
+                  let tracked = trackedWindows[wid],
+                  tracked.frame != .zero else { continue }
+            AccessibilityBridge.setFrame(of: element, to: tracked.frame)
+        }
+    }
+
     private func loadWorkspaceState(workspace: Int, monitor: String) {
+        // Include ALL windows (active + hidden) in knownWindows so the observer
+        // doesn't re-discover hidden windows as "new" on every poll cycle
+        let hiddenIDs = WorkspaceManager.shared.allHiddenWindowIDs()
+
         if let ws = WorkspaceManager.shared.workspaces[monitor]?[workspace] {
             layoutEngine.tiledWindows = ws.tiledWindows
             trackedWindows = ws.trackedWindows
@@ -981,7 +1095,9 @@ class WindowManager: WindowObserverDelegate {
             focusedWindowID = ws.focusedWindowID ?? ws.tiledWindows.first
             layoutEngine.layoutVariant = ws.layoutVariant
             layoutEngine.splitRatio = ws.splitRatio
-            observer.syncKnownWindows(Set(ws.trackedWindows.keys))
+            var allKnown = Set(ws.trackedWindows.keys)
+            allKnown.formUnion(hiddenIDs)
+            observer.syncKnownWindows(allKnown)
         } else {
             // Empty workspace — clear everything
             layoutEngine.tiledWindows.removeAll()
@@ -990,7 +1106,7 @@ class WindowManager: WindowObserverDelegate {
             floatingWindows.removeAll()
             fullscreenWindows.removeAll()
             focusedWindowID = nil
-            observer.syncKnownWindows([])
+            observer.syncKnownWindows(hiddenIDs)
         }
 
         // Focus the workspace's focused window
@@ -1000,6 +1116,13 @@ class WindowManager: WindowObserverDelegate {
     }
 
     // MARK: - Helpers
+
+    /// Convert NSScreen frame to AX/Core Graphics coordinates (origin top-left of primary display)
+    private func screenFrameInAX(for screen: NSScreen) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let axY = primaryHeight - screen.frame.origin.y - screen.frame.height
+        return CGRect(x: screen.frame.origin.x, y: axY, width: screen.frame.width, height: screen.frame.height)
+    }
 
     func appMatchesRule(_ appName: String, bundleID: String?, rules: Set<String>) -> Bool {
         if rules.contains(appName) { return true }

@@ -13,7 +13,8 @@ let package = Package(
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Carbon"),
-                .linkedFramework("CoreVideo")
+                .linkedFramework("CoreVideo"),
+                .unsafeFlags(["-F/System/Library/PrivateFrameworks", "-framework", "SkyLight"])
             ]
         )
     ]
