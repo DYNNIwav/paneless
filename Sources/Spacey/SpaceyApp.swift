@@ -234,10 +234,18 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
         let theme = MenuBarTheme.current
 
-        // Layout indicator: []=  TTT  [M]
-        let layoutIcons = ["[]=", "TTT", "[M]"]
+        // Layout indicator: []=  TTT  [M] (with window count in monocle)
         let variant = wm.layoutEngine.layoutVariant
-        let layoutStr = layoutIcons[min(variant, layoutIcons.count - 1)]
+        let layoutStr: String
+        if variant == 2 && wm.layoutEngine.tiledWindows.count > 1 {
+            // Monocle mode: show position indicator
+            let total = wm.layoutEngine.tiledWindows.count
+            let currentIdx = wm.focusedWindowID.flatMap { wm.layoutEngine.tiledWindows.firstIndex(of: $0) }.map { $0 + 1 } ?? 1
+            layoutStr = "[M \(currentIdx)/\(total)]"
+        } else {
+            let layoutIcons = ["[]=", "TTT", "[M]"]
+            layoutStr = layoutIcons[min(variant, layoutIcons.count - 1)]
+        }
 
         // Active window title
         var windowTitle = ""

@@ -116,4 +116,13 @@ class WorkspaceManager {
         }
         return false
     }
+
+    /// Find which workspace a window is on (for Cmd+Tab integration)
+    func findWorkspace(for windowID: CGWindowID, on monitorID: String) -> Int? {
+        guard let monitorWorkspaces = workspaces[monitorID] else { return nil }
+        for (wsNum, ws) in monitorWorkspaces {
+            if ws.trackedWindows[windowID] != nil { return wsNum }
+        }
+        return nil
+    }
 }

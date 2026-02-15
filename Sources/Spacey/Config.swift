@@ -116,6 +116,12 @@ struct SpaceyConfig {
             }
         }
 
+        // Minimize window: Alt+Shift+M
+        if let m = KeyNames.keyCode(for: "m") { bindings.append(KeyBinding(modifiers: altShift, keyCode: m, action: .minimizeToWorkspace)) }
+
+        // Toggle scratchpad (Ghostty): Alt+Shift+G
+        if let g = KeyNames.keyCode(for: "g") { bindings.append(KeyBinding(modifiers: altShift, keyCode: g, action: .toggleScratchpad)) }
+
         return bindings
     }
 
@@ -334,6 +340,8 @@ struct SpaceyConfig {
         case "move_to_workspace":
             if let n = arg.flatMap({ Int($0) }), n >= 1, n <= 9 { return .moveToWorkspace(n) }
             return nil
+        case "minimize": return .minimizeToWorkspace
+        case "toggle_scratchpad": return .toggleScratchpad
         default: return nil
         }
     }

@@ -49,6 +49,8 @@ enum WMAction {
     case reloadConfig
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
+    case minimizeToWorkspace
+    case toggleScratchpad
 }
 
 struct TilingRegion {

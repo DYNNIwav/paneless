@@ -29,6 +29,24 @@ class WindowManager: WindowObserverDelegate {
     private var resizeStartPos: CGFloat = 0
     private var resizeInitialRatio: CGFloat = 0.5
 
+    // Minimized windows (hidden but tracked in workspace)
+    private var minimizedWindows: Set<CGWindowID> = []
+
+    // Scratchpad state
+    private var scratchpadWindowID: CGWindowID?
+    private var scratchpadVisible = false
+
+    // Per-workspace layout memory
+    private var workspaceLayouts: [String: Int] = [:]  // "monitorID-wsNum" -> layoutVariant
+
+    // Focus flash
+    private var flashOverlay: NSWindow?
+    private var flashWorkItem: DispatchWorkItem?
+
+    // Drag-to-reorder
+    private var dragMonitor: Any?
+    private var dragStartWindowID: CGWindowID?
+
     private init() {
         self.config = SpaceyConfig.load()
         self.layoutEngine = LayoutEngine(config: config)
@@ -81,6 +99,9 @@ class WindowManager: WindowObserverDelegate {
 
         // Mouse drag resize between tiled windows
         setupResizeMonitor()
+
+        // Ctrl+drag to reorder tiled windows
+        setupDragMonitor()
 
         // Force ProMotion to stay at max refresh rate (120Hz)
         if config.forceProMotion {
@@ -143,6 +164,8 @@ class WindowManager: WindowObserverDelegate {
         case .reloadConfig:                 reloadConfig()
         case .switchWorkspace(let n):       switchVirtualWorkspace(n)
         case .moveToWorkspace(let n):       moveToVirtualWorkspace(n)
+        case .minimizeToWorkspace:          minimizeFocused()
+        case .toggleScratchpad:             toggleScratchpad()
         }
     }
 
@@ -170,32 +193,35 @@ class WindowManager: WindowObserverDelegate {
             focusedWindowID = neighborID
             updateBorders(layouts: layouts)
             updateDimming(layouts: layouts)
+            flashFocusedWindow()
             onFocusChange?()
         }
     }
 
-    /// Cycle focus through tiled windows in list order (wraps around).
+    /// Cycle focus through tiled AND floating windows in list order (wraps around).
     private func focusCycle(forward: Bool) {
-        let windows = layoutEngine.tiledWindows
-        guard windows.count >= 2 else { return }
+        // Build a combined list: tiled windows first, then floating windows
+        let allWindows = layoutEngine.tiledWindows + Array(floatingWindows).sorted()
+        guard allWindows.count >= 2 else { return }
 
         let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
-        let currentIdx = currentID.flatMap { windows.firstIndex(of: $0) } ?? 0
+        let currentIdx = currentID.flatMap { allWindows.firstIndex(of: $0) } ?? 0
 
         let nextIdx: Int
         if forward {
-            nextIdx = (currentIdx + 1) % windows.count
+            nextIdx = (currentIdx + 1) % allWindows.count
         } else {
-            nextIdx = (currentIdx - 1 + windows.count) % windows.count
+            nextIdx = (currentIdx - 1 + allWindows.count) % allWindows.count
         }
 
-        let targetID = windows[nextIdx]
+        let targetID = allWindows[nextIdx]
         if let element = axElements[targetID], let tracked = trackedWindows[targetID] {
             AccessibilityBridge.focus(window: element, pid: tracked.pid)
             focusedWindowID = targetID
             let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
             updateBorders(layouts: layouts)
             updateDimming(layouts: layouts)
+            flashFocusedWindow()
             onFocusChange?()
         }
     }
@@ -586,6 +612,10 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
+        // Check if this is the scratchpad window we just launched
+        checkScratchpadPending(windowID: windowID, appName: appName, bundleID: bundleID)
+        if scratchpadWindowID == windowID { return }  // Scratchpad handles its own setup
+
         // Auto-float dialogs and small windows
         if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
             if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
@@ -717,6 +747,15 @@ class WindowManager: WindowObserverDelegate {
     func windowDestroyed(windowID: CGWindowID) {
         guard trackedWindows[windowID] != nil else { return }
 
+        // Clean up scratchpad if its window was closed
+        if windowID == scratchpadWindowID {
+            scratchpadWindowID = nil
+            scratchpadVisible = false
+        }
+
+        // Clean up minimized state
+        minimizedWindows.remove(windowID)
+
         let destroyedPid = trackedWindows[windowID]?.pid
 
         trackedWindows.removeValue(forKey: windowID)
@@ -750,10 +789,15 @@ class WindowManager: WindowObserverDelegate {
                 || focusedWindowID == nil
                 || !appStillTiled
 
-            if shouldRefocus, let firstWid = layoutEngine.tiledWindows.first,
-               let element = axElements[firstWid], let tracked = trackedWindows[firstWid] {
-                AccessibilityBridge.focus(window: element, pid: tracked.pid)
-                focusedWindowID = firstWid
+            if shouldRefocus {
+                if let firstWid = layoutEngine.tiledWindows.first,
+                   let element = axElements[firstWid], let tracked = trackedWindows[firstWid] {
+                    AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                    focusedWindowID = firstWid
+                } else if layoutEngine.tiledWindows.isEmpty && floatingWindows.isEmpty {
+                    // No windows left on this workspace — focus Finder/desktop
+                    focusDesktop()
+                }
             }
 
             let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
@@ -793,6 +837,7 @@ class WindowManager: WindowObserverDelegate {
         let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
         updateBorders(layouts: layouts)
         updateDimming(layouts: layouts)
+        flashFocusedWindow()
         onFocusChange?()
     }
 
@@ -811,6 +856,13 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.cycleVariant()
         let names = ["side-by-side", "stacked", "monocle"]
         spaceyLog("Layout: \(names[layoutEngine.layoutVariant])")
+
+        // Save layout variant for this workspace
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
+        workspaceLayouts["\(monitorID)-\(currentWS)"] = layoutEngine.layoutVariant
+
         retile()
     }
 
@@ -829,6 +881,20 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.splitRatio = max(0.2, min(0.8, layoutEngine.splitRatio + delta))
         spaceyLog("Split ratio: \(layoutEngine.splitRatio)")
         retile()
+    }
+
+    // MARK: - Focus Desktop (Empty Workspace)
+
+    /// When no windows are on the current workspace, activate Finder so macOS
+    /// doesn't keep a random app from another workspace focused.
+    private func focusDesktop() {
+        if let finder = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.apple.finder"
+        }) {
+            finder.activate()
+            focusedWindowID = nil
+            spaceyLog("Empty workspace — focused Finder/desktop")
+        }
     }
 
     // MARK: - Click-to-Focus Dimming Refresh
@@ -1111,6 +1177,283 @@ class WindowManager: WindowObserverDelegate {
         )
     }
 
+    // MARK: - Focus Flash Effect
+
+    private func flashFocusedWindow() {
+        guard let focusedID = focusedWindowID,
+              let frame = layoutEngine.calculateFrames(in: getTilingRegion())
+                  .first(where: { $0.0 == focusedID })?.1
+              ?? trackedWindows[focusedID].flatMap({ _ in
+                  axElements[focusedID].flatMap { AccessibilityBridge.getFrame(of: $0) }
+              })
+        else { return }
+
+        flashWorkItem?.cancel()
+
+        let cocoaFrame = axToCocoaFrame(frame)
+
+        if flashOverlay == nil {
+            let window = NSWindow(
+                contentRect: cocoaFrame,
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue + 3)
+            window.ignoresMouseEvents = true
+            window.hasShadow = false
+            window.collectionBehavior = [.stationary]
+
+            let view = NSView(frame: NSRect(origin: .zero, size: cocoaFrame.size))
+            view.wantsLayer = true
+            view.layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
+            view.layer?.borderWidth = 3
+            view.layer?.cornerRadius = 10
+            view.layer?.masksToBounds = true
+            window.contentView = view
+            flashOverlay = window
+        } else {
+            flashOverlay?.setFrame(cocoaFrame, display: false)
+            flashOverlay?.contentView?.frame = NSRect(origin: .zero, size: cocoaFrame.size)
+        }
+
+        flashOverlay?.alphaValue = 1.0
+        flashOverlay?.orderFrontRegardless()
+
+        let work = DispatchWorkItem { [weak self] in
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.2
+                self?.flashOverlay?.animator().alphaValue = 0
+            }, completionHandler: {
+                self?.flashOverlay?.orderOut(nil)
+            })
+        }
+        flashWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    // MARK: - Window Minimize to Workspace
+
+    private func minimizeFocused() {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+              let element = axElements[windowID],
+              trackedWindows[windowID] != nil
+        else { return }
+
+        if minimizedWindows.contains(windowID) {
+            // Already minimized — restore it
+            restoreMinimized(windowID)
+            return
+        }
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screenFrameInAX(for: screen)
+
+        // Hide off-screen (same technique as workspace hiding)
+        WorkspaceManager.shared.hideWindow(windowID, element: element, screenFrame: screenFrame)
+        minimizedWindows.insert(windowID)
+
+        // Remove from tiling
+        let wasTiled = layoutEngine.contains(windowID)
+        if wasTiled { layoutEngine.remove(windowID: windowID) }
+
+        // Remove dim overlay
+        if let overlay = dimOverlays.removeValue(forKey: windowID) {
+            overlay.orderOut(nil)
+        }
+        dimmedWindows.remove(windowID)
+
+        retile()
+
+        // Focus next window or desktop
+        if let firstWid = layoutEngine.tiledWindows.first,
+           let el = axElements[firstWid], let tracked = trackedWindows[firstWid] {
+            AccessibilityBridge.focus(window: el, pid: tracked.pid)
+            focusedWindowID = firstWid
+        } else {
+            focusDesktop()
+        }
+
+        spaceyLog("Minimized window \(windowID)")
+        onFocusChange?()
+    }
+
+    private func restoreMinimized(_ windowID: CGWindowID) {
+        guard let element = axElements[windowID],
+              let tracked = trackedWindows[windowID]
+        else { return }
+
+        minimizedWindows.remove(windowID)
+
+        // Restore to visible position
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screenFrameInAX(for: screen)
+        let restoreFrame = CGRect(
+            x: screenFrame.origin.x + screenFrame.width / 4,
+            y: screenFrame.origin.y + screenFrame.height / 4,
+            width: screenFrame.width / 2,
+            height: screenFrame.height / 2
+        )
+        AccessibilityBridge.setFrame(of: element, to: restoreFrame)
+
+        // Re-tile if not floating
+        if !floatingWindows.contains(windowID) {
+            layoutEngine.insert(windowID: windowID, afterFocused: focusedWindowID)
+        }
+
+        AccessibilityBridge.focus(window: element, pid: tracked.pid)
+        focusedWindowID = windowID
+        retile()
+        spaceyLog("Restored minimized window \(windowID)")
+        onFocusChange?()
+    }
+
+    // MARK: - Scratchpad (Dedicated Ghostty Dropdown)
+
+    /// The scratchpad launches a NEW Ghostty window (via `open -na Ghostty`)
+    /// that is always floating and never interferes with existing Ghostty windows.
+    private var scratchpadPendingLaunch = false
+
+    private func toggleScratchpad() {
+        if let wid = scratchpadWindowID, scratchpadVisible {
+            hideScratchpad(wid)
+        } else if let wid = scratchpadWindowID, !scratchpadVisible,
+                  axElements[wid] != nil {
+            showScratchpad(wid)
+        } else {
+            // Launch a brand new Ghostty instance for the scratchpad
+            scratchpadPendingLaunch = true
+            scratchpadWindowID = nil
+            // open -na opens a new instance even if Ghostty is already running
+            let task = Process()
+            task.launchPath = "/usr/bin/open"
+            task.arguments = ["-na", "Ghostty"]
+            task.launch()
+            spaceyLog("Scratchpad: launching new Ghostty instance")
+        }
+    }
+
+    /// Called from windowCreated — checks if this is the scratchpad window we're waiting for
+    func checkScratchpadPending(windowID: CGWindowID, appName: String, bundleID: String?) {
+        guard scratchpadPendingLaunch,
+              appName == "Ghostty" || bundleID == "com.mitchellh.ghostty"
+        else { return }
+
+        scratchpadPendingLaunch = false
+        scratchpadWindowID = windowID
+
+        // Make it floating so it doesn't interfere with tiling
+        floatingWindows.insert(windowID)
+        if layoutEngine.contains(windowID) {
+            layoutEngine.remove(windowID: windowID)
+            retile()
+        }
+
+        showScratchpad(windowID)
+    }
+
+    private func showScratchpad(_ wid: CGWindowID) {
+        guard let element = axElements[wid], let tracked = trackedWindows[wid] else { return }
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screenFrameInAX(for: screen)
+
+        // Center the scratchpad at 80% width, 60% height
+        let w = screenFrame.width * 0.8
+        let h = screenFrame.height * 0.6
+        let x = screenFrame.origin.x + (screenFrame.width - w) / 2
+        let y = screenFrame.origin.y + screenFrame.height * 0.05
+        let frame = CGRect(x: x, y: y, width: w, height: h)
+
+        AccessibilityBridge.setFrame(of: element, to: frame)
+        AccessibilityBridge.focus(window: element, pid: tracked.pid)
+        focusedWindowID = wid
+        scratchpadVisible = true
+
+        spaceyLog("Scratchpad shown")
+        onFocusChange?()
+    }
+
+    private func hideScratchpad(_ wid: CGWindowID) {
+        guard let element = axElements[wid] else { return }
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screenFrameInAX(for: screen)
+
+        WorkspaceManager.shared.hideWindow(wid, element: element, screenFrame: screenFrame)
+        scratchpadVisible = false
+
+        // Remove dim overlay if any
+        if let overlay = dimOverlays.removeValue(forKey: wid) {
+            overlay.orderOut(nil)
+        }
+        dimmedWindows.remove(wid)
+
+        // Focus the first tiled window
+        if let firstWid = layoutEngine.tiledWindows.first,
+           let el = axElements[firstWid], let tracked = trackedWindows[firstWid] {
+            AccessibilityBridge.focus(window: el, pid: tracked.pid)
+            focusedWindowID = firstWid
+        }
+
+        spaceyLog("Scratchpad hidden")
+        onFocusChange?()
+    }
+
+    // MARK: - Drag to Reorder
+
+    private func setupDragMonitor() {
+        dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            self?.handleDragReorder(event)
+        }
+    }
+
+    private func handleDragReorder(_ event: NSEvent) {
+        // Only reorder when Ctrl is held
+        guard event.modifierFlags.contains(.control) else {
+            dragStartWindowID = nil
+            return
+        }
+
+        let mouseLocation = NSEvent.mouseLocation
+        // Convert to AX coordinates
+        guard let primaryScreen = NSScreen.screens.first else { return }
+        let axPoint = CGPoint(x: mouseLocation.x, y: primaryScreen.frame.height - mouseLocation.y)
+
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+
+        if event.type == .leftMouseDragged {
+            if dragStartWindowID == nil {
+                // Find which tiled window the drag started on
+                for (wid, frame) in layouts {
+                    if frame.contains(axPoint) {
+                        dragStartWindowID = wid
+                        break
+                    }
+                }
+            }
+        } else if event.type == .leftMouseUp {
+            guard let startID = dragStartWindowID else { return }
+            dragStartWindowID = nil
+
+            // Find which tiled window we dropped on
+            for (wid, frame) in layouts {
+                if frame.contains(axPoint) && wid != startID {
+                    // Swap positions in the layout engine
+                    if let idx1 = layoutEngine.tiledWindows.firstIndex(of: startID),
+                       let idx2 = layoutEngine.tiledWindows.firstIndex(of: wid) {
+                        layoutEngine.tiledWindows.swapAt(idx1, idx2)
+                        retile()
+                        spaceyLog("Drag-reorder: swapped \(startID) with \(wid)")
+                    }
+                    break
+                }
+            }
+        }
+    }
+
     // MARK: - Virtual Workspace Switching
 
     private func switchVirtualWorkspace(_ number: Int) {
@@ -1134,6 +1477,9 @@ class WindowManager: WindowObserverDelegate {
         // Remove dim overlays before switching (they reference old workspace windows)
         restoreAllDimming()
 
+        // Save current layout variant for this workspace
+        workspaceLayouts["\(monitorID)-\(currentWS)"] = layoutEngine.layoutVariant
+
         // Save current state into WorkspaceManager
         saveWorkspaceState(workspace: currentWS, monitor: monitorID)
 
@@ -1144,11 +1490,27 @@ class WindowManager: WindowObserverDelegate {
         // Load new workspace state
         loadWorkspaceState(workspace: number, monitor: monitorID)
 
+        // Restore layout variant for this workspace
+        if let savedVariant = workspaceLayouts["\(monitorID)-\(number)"] {
+            layoutEngine.layoutVariant = savedVariant
+        }
+
         retile()
 
         // Restore floating/fullscreen windows to their saved positions
         // (retile only handles tiled windows; floating windows need explicit restoration)
         restoreFloatingWindowPositions()
+
+        // If workspace is empty, focus Finder so macOS doesn't keep a
+        // random app from another workspace focused
+        if layoutEngine.tiledWindows.isEmpty && floatingWindows.isEmpty {
+            focusDesktop()
+        } else if let firstWid = layoutEngine.tiledWindows.first,
+                  let element = axElements[firstWid],
+                  let tracked = trackedWindows[firstWid] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+            focusedWindowID = firstWid
+        }
 
         onSpaceChange?()
         spaceyLog("Switched to workspace \(number) on \(monitorID)")
