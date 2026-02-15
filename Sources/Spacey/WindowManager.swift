@@ -1,0 +1,1011 @@
+import Cocoa
+
+class WindowManager: WindowObserverDelegate {
+    static let shared = WindowManager()
+
+    var config: SpaceyConfig
+    let layoutEngine: LayoutEngine
+    let observer: WindowObserver
+    let eventTap: EventTap
+
+    var onSpaceChange: (() -> Void)?
+    var onFocusChange: (() -> Void)?
+
+    var trackedWindows: [CGWindowID: TrackedWindow] = [:]
+    var axElements: [CGWindowID: AXUIElement] = [:]
+    var floatingWindows: Set<CGWindowID> = []
+    var fullscreenWindows: Set<CGWindowID> = []
+    var focusedWindowID: CGWindowID?
+
+    private var mouseMonitor: Any?
+    private var lastMouseFocusTime: Date = .distantPast
+    private var dimmedWindows: Set<CGWindowID> = []
+    private var resizeMonitor: Any?
+    private var isResizing = false
+    private var resizeStartPos: CGFloat = 0
+    private var resizeInitialRatio: CGFloat = 0.5
+
+    private init() {
+        self.config = SpaceyConfig.load()
+        self.layoutEngine = LayoutEngine(config: config)
+        self.observer = WindowObserver()
+        self.eventTap = EventTap()
+    }
+
+    func start() {
+        BorderManager.shared.config = config.border
+        eventTap.keyBindings = config.keyBindings
+
+        observer.delegate = self
+        observer.start()
+
+        eventTap.actionHandler = { [weak self] action in
+            self?.handleAction(action)
+        }
+        eventTap.start()
+
+        scanCurrentSpace()
+
+        // Smart retile on display change (monitor connected/disconnected/resolution change)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(displayConfigChanged(_:)),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+
+        // Focus follows mouse
+        if config.focusFollowsMouse {
+            startFocusFollowsMouse()
+        }
+
+        // Mouse drag resize between tiled windows
+        setupResizeMonitor()
+
+        spaceyLog("Spacey started (monitors: \(NSScreen.screens.count), bindings: \(config.keyBindings.count))")
+    }
+
+    func stop() {
+        Animator.shared.cancelAll()
+        BorderManager.shared.removeAll()
+        restoreAllWindowAlpha()
+        stopFocusFollowsMouse()
+        stopResizeMonitor()
+        NotificationCenter.default.removeObserver(self)
+        observer.stop()
+        eventTap.stop()
+        spaceyLog("Spacey stopped")
+    }
+
+    // MARK: - Action Dispatch
+
+    func handleAction(_ action: WMAction) {
+        switch action {
+        case .focusDirection(let dir):      focusInDirection(dir)
+        case .focusNext:                    focusCycle(forward: true)
+        case .focusPrev:                    focusCycle(forward: false)
+        case .swapWithMaster:               swapWithMaster()
+        case .toggleFloat:                  toggleFloat()
+        case .toggleFullscreen:             toggleFullscreen()
+        case .closeFocused:                 closeFocused()
+        case .focusMonitor(let dir):        focusMonitor(dir)
+        case .moveToMonitor(let dir):       moveToMonitor(dir)
+        case .positionLeft:                 positionFocused(.left)
+        case .positionRight:                positionFocused(.right)
+        case .positionUp:                   positionFocused(.up)
+        case .positionDown:                 positionFocused(.down)
+        case .positionFill:                 positionFocused(.fill)
+        case .positionCenter:               positionFocused(.center)
+        case .rotateNext:                   rotateWindows(forward: true)
+        case .rotatePrev:                   rotateWindows(forward: false)
+        case .cycleLayout:                  cycleLayout()
+        case .increaseGap:                  adjustGap(by: 4)
+        case .decreaseGap:                  adjustGap(by: -4)
+        case .growFocused:                  adjustSplitRatio(by: 0.05)
+        case .shrinkFocused:                adjustSplitRatio(by: -0.05)
+        case .retile:
+            layoutEngine.splitRatio = 0.5
+            layoutEngine.layoutVariant = 0
+            scanCurrentSpace()
+        case .reloadConfig:                 reloadConfig()
+        case .switchWorkspace(let n):       switchVirtualWorkspace(n)
+        case .moveToWorkspace(let n):       moveToVirtualWorkspace(n)
+        }
+    }
+
+    // MARK: - Focus Navigation
+
+    private func focusInDirection(_ direction: Direction) {
+        var currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+
+        // If the focused window isn't in our tiled layout (common with Electron apps
+        // like Arc/Cursor that have internal windows), fall back to the first tiled window.
+        if let cid = currentID, layouts.first(where: { $0.0 == cid }) == nil {
+            currentID = layoutEngine.tiledWindows.first
+            if let fid = currentID { focusedWindowID = fid }
+        }
+
+        guard let currentID = currentID else { return }
+
+        guard let neighborID = layoutEngine.getNeighbor(of: currentID, direction: direction, layouts: layouts)
+        else { return }
+
+        if let element = axElements[neighborID], let tracked = trackedWindows[neighborID] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+            focusedWindowID = neighborID
+            updateBorders(layouts: layouts)
+            updateDimming(layouts: layouts)
+        }
+    }
+
+    /// Cycle focus through tiled windows in list order (wraps around).
+    private func focusCycle(forward: Bool) {
+        let windows = layoutEngine.tiledWindows
+        guard windows.count >= 2 else { return }
+
+        let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        let currentIdx = currentID.flatMap { windows.firstIndex(of: $0) } ?? 0
+
+        let nextIdx: Int
+        if forward {
+            nextIdx = (currentIdx + 1) % windows.count
+        } else {
+            nextIdx = (currentIdx - 1 + windows.count) % windows.count
+        }
+
+        let targetID = windows[nextIdx]
+        if let element = axElements[targetID], let tracked = trackedWindows[targetID] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+            focusedWindowID = targetID
+            let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+            updateBorders(layouts: layouts)
+            updateDimming(layouts: layouts)
+        }
+    }
+
+    // MARK: - Multi-Monitor
+
+    private func focusMonitor(_ direction: Direction) {
+        guard let currentScreen = NSScreen.main,
+              let targetScreen = SpaceManager.neighborScreen(of: currentScreen, direction: direction)
+        else { return }
+
+        for (windowID, tracked) in trackedWindows {
+            guard let element = axElements[windowID],
+                  !floatingWindows.contains(windowID)
+            else { continue }
+
+            if let frame = AccessibilityBridge.getFrame(of: element) {
+                let screenForWindow = SpaceManager.screen(containing: CGPoint(x: frame.midX, y: frame.midY))
+                if screenForWindow == targetScreen {
+                    AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                    focusedWindowID = windowID
+                    return
+                }
+            }
+        }
+    }
+
+    private func moveToMonitor(_ direction: Direction) {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+              let element = axElements[windowID],
+              let currentFrame = AccessibilityBridge.getFrame(of: element)
+        else { return }
+
+        let currentScreen = SpaceManager.screen(containing: currentFrame.origin) ?? NSScreen.main!
+        guard let targetScreen = SpaceManager.neighborScreen(of: currentScreen, direction: direction) else { return }
+
+        let targetVisible = targetScreen.visibleFrame
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? targetScreen.frame.height
+        let axY = primaryHeight - targetVisible.origin.y - targetVisible.size.height
+
+        let newFrame = CGRect(
+            x: targetVisible.origin.x + (targetVisible.width - currentFrame.width) / 2,
+            y: axY + (targetVisible.height - currentFrame.height) / 2,
+            width: currentFrame.width,
+            height: currentFrame.height
+        )
+        AccessibilityBridge.setFrame(of: element, to: newFrame)
+    }
+
+    // MARK: - Swap / Layout
+
+    private func swapWithMaster() {
+        guard let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        layoutEngine.swapWithFirst(currentID)
+        retile()
+    }
+
+    private func rotateWindows(forward: Bool) {
+        guard layoutEngine.tiledWindows.count >= 2 else { return }
+        if forward {
+            layoutEngine.rotateNext()
+        } else {
+            layoutEngine.rotatePrev()
+        }
+        retile()
+
+        // Re-focus the same window at its new position so focus follows the move
+        if let fid = focusedWindowID,
+           let element = axElements[fid],
+           let tracked = trackedWindows[fid] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+        }
+    }
+
+    // MARK: - Float / Fullscreen
+
+    private func toggleFloat() {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+
+        if floatingWindows.contains(windowID) {
+            floatingWindows.remove(windowID)
+            layoutEngine.insert(windowID: windowID, afterFocused: nil)
+        } else {
+            floatingWindows.insert(windowID)
+            layoutEngine.remove(windowID: windowID)
+        }
+        retile()
+    }
+
+    private func toggleFullscreen() {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+              let element = axElements[windowID]
+        else { return }
+
+        if fullscreenWindows.contains(windowID) {
+            fullscreenWindows.remove(windowID)
+            layoutEngine.insert(windowID: windowID, afterFocused: nil)
+            retile()
+        } else {
+            fullscreenWindows.insert(windowID)
+            layoutEngine.remove(windowID: windowID)
+            // Use the full visible screen (menu bar + dock respected, no Spacey gaps)
+            let screen = NSScreen.main ?? NSScreen.screens.first!
+            let visibleFrame = screen.visibleFrame
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+            let axY = primaryHeight - visibleFrame.origin.y - visibleFrame.size.height
+            let fullFrame = CGRect(x: visibleFrame.origin.x, y: axY,
+                                   width: visibleFrame.width, height: visibleFrame.height)
+            AccessibilityBridge.setFrame(of: element, to: fullFrame)
+            retile()
+        }
+    }
+
+    // MARK: - Window Positioning
+
+    private enum Position { case left, right, up, down, fill, center }
+
+    private func positionFocused(_ position: Position) {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+
+        switch position {
+        case .left:
+            // Move focused window to first position in layout
+            guard layoutEngine.contains(windowID) else { return }
+            layoutEngine.tiledWindows.removeAll { $0 == windowID }
+            layoutEngine.tiledWindows.insert(windowID, at: 0)
+            retile()
+
+        case .right:
+            // Move focused window to last position in layout
+            guard layoutEngine.contains(windowID) else { return }
+            layoutEngine.tiledWindows.removeAll { $0 == windowID }
+            layoutEngine.tiledWindows.append(windowID)
+            retile()
+
+        case .up:
+            // Swap focused window one position earlier
+            guard let idx = layoutEngine.tiledWindows.firstIndex(of: windowID), idx > 0 else { return }
+            layoutEngine.tiledWindows.swapAt(idx, idx - 1)
+            retile()
+
+        case .down:
+            // Swap focused window one position later
+            guard let idx = layoutEngine.tiledWindows.firstIndex(of: windowID),
+                  idx < layoutEngine.tiledWindows.count - 1 else { return }
+            layoutEngine.tiledWindows.swapAt(idx, idx + 1)
+            retile()
+
+        case .fill:
+            guard let element = axElements[windowID] else { return }
+            let region = getTilingRegion()
+            let gap = config.innerGap
+            let halfGap = gap / 2
+            let frame = CGRect(
+                x: region.x + halfGap,
+                y: region.y + halfGap,
+                width: max(region.width - gap, 100),
+                height: max(region.height - gap, 100)
+            )
+            AccessibilityBridge.setFrame(of: element, to: frame)
+
+        case .center:
+            guard let element = axElements[windowID] else { return }
+            let region = getTilingRegion()
+            let w = region.width * 0.6
+            let h = region.height * 0.7
+            let frame = CGRect(
+                x: region.x + (region.width - w) / 2,
+                y: region.y + (region.height - h) / 2,
+                width: w,
+                height: h
+            )
+            AccessibilityBridge.setFrame(of: element, to: frame)
+        }
+    }
+
+    // MARK: - Close
+
+    private func closeFocused() {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+              let element = axElements[windowID]
+        else { return }
+        AccessibilityBridge.close(window: element)
+    }
+
+    // MARK: - Config Reload
+
+    private func reloadConfig() {
+        config = SpaceyConfig.load()
+        layoutEngine.config = config
+        BorderManager.shared.config = config.border
+        eventTap.keyBindings = config.keyBindings
+
+        // Update focus-follows-mouse
+        stopFocusFollowsMouse()
+        if config.focusFollowsMouse {
+            startFocusFollowsMouse()
+        }
+
+        // Update dimming
+        if config.dimUnfocused <= 0 {
+            restoreAllWindowAlpha()
+        }
+
+        scanCurrentSpace()
+        spaceyLog("Config reloaded")
+    }
+
+    // MARK: - Tiling
+
+    func retile() {
+        let windows = layoutEngine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
+            guard let el = axElements[wid], let t = trackedWindows[wid] else { return nil }
+            return (wid, el, t.pid)
+        }
+
+        let region = getTilingRegion()
+
+        // Native macOS compositor tiling: GPU-driven animation, no content redraw.
+        // Only used when explicitly enabled — incompatible with gaps.
+        if config.nativeAnimation &&
+           NativeTiling.canUseMenuTiling(count: windows.count, splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant) {
+            let menuSuccess = NativeTiling.applyViaMenu(
+                windows: windows,
+                variant: layoutEngine.layoutVariant
+            )
+
+            if menuSuccess {
+                // Restore focus to the originally focused window (applyViaMenu cycles focus)
+                if let focusedID = focusedWindowID,
+                   let element = axElements[focusedID],
+                   let tracked = trackedWindows[focusedID] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                    }
+                }
+            } else {
+                spaceyLog("retile: menu tiling failed, falling back to AX frames")
+                NativeTiling.applyLayout(
+                    windows: windows, region: region, gap: config.innerGap,
+                    singleWindowPadding: config.singleWindowPadding,
+                    splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+                )
+            }
+        } else {
+            NativeTiling.applyLayout(
+                windows: windows, region: region, gap: config.innerGap,
+                singleWindowPadding: config.singleWindowPadding,
+                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+            )
+        }
+
+        let layouts = layoutEngine.calculateFrames(in: region)
+        updateBorders(layouts: layouts)
+        updateDimming(layouts: layouts)
+    }
+
+    func getTilingRegion(for screen: NSScreen? = nil) -> TilingRegion {
+        let screen = screen ?? NSScreen.main ?? NSScreen.screens.first
+
+        guard let screen = screen else {
+            return TilingRegion(x: 0, y: 0, width: 1920, height: 1080)
+        }
+
+        let visibleFrame = screen.visibleFrame
+        let gap = config.outerGap
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let axY = primaryHeight - visibleFrame.origin.y - visibleFrame.size.height
+
+        return TilingRegion(
+            x: visibleFrame.origin.x + gap,
+            y: axY + config.sketchybarHeight + gap,
+            width: visibleFrame.size.width - gap * 2,
+            height: visibleFrame.size.height - config.sketchybarHeight - gap * 2
+        )
+    }
+
+    // MARK: - Border Updates
+
+    private func updateBorders(layouts: [(CGWindowID, CGRect)]) {
+        guard config.border.enabled else { return }
+
+        let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        if let fid = focusedID, let layout = layouts.first(where: { $0.0 == fid }) {
+            BorderManager.shared.updateFocus(windowID: fid, frame: layout.1)
+        } else {
+            BorderManager.shared.updateFocus(windowID: nil, frame: nil)
+        }
+    }
+
+    // MARK: - Window Scanning
+
+    func scanCurrentSpace() {
+        layoutEngine.tiledWindows.removeAll()
+        trackedWindows.removeAll()
+        axElements.removeAll()
+        floatingWindows.removeAll()
+        fullscreenWindows.removeAll()
+
+        let windowIDs = SpaceManager.getWindowsOnCurrentSpace()
+        observer.syncKnownWindows(Set(windowIDs))
+
+        for windowID in windowIDs {
+            guard let info = SpaceManager.getWindowInfo(windowID) else { continue }
+            guard !appMatchesRule(info.appName, bundleID: info.bundleID, rules: config.excludeApps) else { continue }
+
+            var shouldFloat = appMatchesRule(info.appName, bundleID: info.bundleID, rules: config.floatApps)
+
+            let tracked = TrackedWindow(
+                windowID: windowID,
+                pid: info.pid,
+                appName: info.appName,
+                bundleID: info.bundleID,
+                isFloating: shouldFloat,
+                frame: info.frame
+            )
+            trackedWindows[windowID] = tracked
+
+            for (element, wid) in AccessibilityBridge.getWindows(for: info.pid) {
+                if wid == windowID {
+                    axElements[windowID] = element
+                    break
+                }
+            }
+
+            // Auto-float dialogs and small windows
+            if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
+                if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
+                    shouldFloat = true
+                }
+            }
+
+            if shouldFloat {
+                floatingWindows.insert(windowID)
+            } else if axElements[windowID] != nil {
+                layoutEngine.insert(windowID: windowID, afterFocused: nil)
+            } else {
+                trackedWindows.removeValue(forKey: windowID)
+            }
+        }
+
+        focusedWindowID = AccessibilityBridge.getFocusedWindowID()
+        retile()
+    }
+
+    // MARK: - WindowObserverDelegate
+
+    func windowCreated(windowID: CGWindowID, pid: pid_t, appName: String) {
+        guard trackedWindows[windowID] == nil else { return }
+        let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        guard !appMatchesRule(appName, bundleID: bundleID, rules: config.excludeApps) else { return }
+
+        var shouldFloat = appMatchesRule(appName, bundleID: bundleID, rules: config.floatApps)
+
+        let tracked = TrackedWindow(
+            windowID: windowID,
+            pid: pid,
+            appName: appName,
+            bundleID: bundleID,
+            isFloating: shouldFloat
+        )
+        trackedWindows[windowID] = tracked
+
+        for (element, wid) in AccessibilityBridge.getWindows(for: pid) {
+            if wid == windowID {
+                axElements[windowID] = element
+                break
+            }
+        }
+
+        // Auto-float dialogs and small windows
+        if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
+            if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
+                shouldFloat = true
+                spaceyLog("Auto-floating dialog/small window: \(appName) (\(windowID))")
+            }
+        }
+
+        // Auto-float secondary windows from apps that already have a tiled window.
+        // Catches: settings panels, popups, tab pickers, address bar suggestions, etc.
+        if !shouldFloat, let element = axElements[windowID] {
+            let appAlreadyTiled = layoutEngine.tiledWindows.contains { tid in
+                trackedWindows[tid]?.pid == pid
+            }
+            if appAlreadyTiled {
+                let title = AccessibilityBridge.getTitle(of: element)
+                let isUntitled = title == nil || title?.isEmpty == true
+
+                // Check if the window is smaller than 70% of the tiling region
+                // (settings panels, preferences, etc. are typically smaller)
+                var isSmallerThanRegion = false
+                if let frame = AccessibilityBridge.getFrame(of: element) {
+                    let region = getTilingRegion()
+                    isSmallerThanRegion = frame.width < region.width * 0.7 || frame.height < region.height * 0.7
+                }
+
+                if isUntitled || isSmallerThanRegion {
+                    shouldFloat = true
+                    spaceyLog("Auto-floating secondary window from \(appName) (\(windowID))")
+                }
+            }
+        }
+
+        if shouldFloat {
+            floatingWindows.insert(windowID)
+        } else if axElements[windowID] != nil {
+            layoutEngine.insert(windowID: windowID, afterFocused: focusedWindowID)
+
+            // Apply per-app layout rules (e.g. "Arc = left" puts Arc at index 0)
+            let ruleKey = config.appLayoutRules[appName]
+                ?? (bundleID.flatMap { config.appLayoutRules[$0] })
+            if let rule = ruleKey {
+                switch rule {
+                case "left":
+                    layoutEngine.tiledWindows.removeAll { $0 == windowID }
+                    layoutEngine.tiledWindows.insert(windowID, at: 0)
+                case "right":
+                    layoutEngine.tiledWindows.removeAll { $0 == windowID }
+                    layoutEngine.tiledWindows.append(windowID)
+                default: break
+                }
+            }
+
+            // macOS gives focus to newly created windows, so update our tracking
+            // to match. This ensures dim overlays and borders reflect actual focus.
+            focusedWindowID = windowID
+
+            retile()
+        } else {
+            trackedWindows.removeValue(forKey: windowID)
+        }
+    }
+
+    func windowDestroyed(windowID: CGWindowID) {
+        guard trackedWindows[windowID] != nil else { return }
+
+        let destroyedPid = trackedWindows[windowID]?.pid
+
+        trackedWindows.removeValue(forKey: windowID)
+        axElements.removeValue(forKey: windowID)
+        floatingWindows.remove(windowID)
+        fullscreenWindows.remove(windowID)
+        dimmedWindows.remove(windowID)
+
+        let wasTiled = layoutEngine.contains(windowID)
+        if wasTiled {
+            layoutEngine.remove(windowID: windowID)
+            retile()
+        }
+
+        // Always try to focus a remaining tiled window after a tiled window is destroyed.
+        // macOS may keep focus on the app that owned the closed window
+        // (e.g. Ghostty/Arc with windows on other spaces), even if the destroyed
+        // window wasn't tracked as focusedWindowID (Cmd+W bypass).
+        if wasTiled {
+            // Check if current focus is still on the destroyed window's app
+            // and that app has no more tiled windows on this space.
+            let appStillTiled = layoutEngine.tiledWindows.contains { tid in
+                trackedWindows[tid]?.pid == destroyedPid
+            }
+
+            let shouldRefocus = focusedWindowID == windowID
+                || focusedWindowID == nil
+                || !appStillTiled
+
+            if shouldRefocus, let firstWid = layoutEngine.tiledWindows.first,
+               let element = axElements[firstWid], let tracked = trackedWindows[firstWid] {
+                AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                focusedWindowID = firstWid
+            }
+
+            let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+            updateBorders(layouts: layouts)
+            updateDimming(layouts: layouts)
+        }
+    }
+
+    func spaceChanged() {
+        // With virtual workspaces, native space changes are a no-op.
+        // All workspace switching is handled by switchVirtualWorkspace().
+        spaceyLog("Native space change detected (ignored — using virtual workspaces)")
+    }
+
+    func focusChanged() {
+        guard let newFocusedID = AccessibilityBridge.getFocusedWindowID(),
+              newFocusedID != focusedWindowID,
+              // Only update if the newly focused window is one we're tracking on this space.
+              // This check is sufficient to prevent stale focus events from other spaces —
+              // after space change, trackedWindows only contains windows for the current space.
+              trackedWindows[newFocusedID] != nil
+        else { return }
+
+        focusedWindowID = newFocusedID
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+        updateBorders(layouts: layouts)
+        updateDimming(layouts: layouts)
+        onFocusChange?()
+    }
+
+    func applicationLaunched(pid: pid_t, name: String) {}
+
+    func applicationTerminated(pid: pid_t, name: String) {
+        let toRemove = trackedWindows.filter { $0.value.pid == pid }.map { $0.key }
+        for windowID in toRemove {
+            windowDestroyed(windowID: windowID)
+        }
+    }
+
+    // MARK: - Cycle Layout
+
+    private func cycleLayout() {
+        layoutEngine.cycleVariant()
+        let names = ["side-by-side", "stacked", "monocle"]
+        spaceyLog("Layout: \(names[layoutEngine.layoutVariant])")
+        retile()
+    }
+
+    // MARK: - Gap Resize
+
+    private func adjustGap(by delta: CGFloat) {
+        config.innerGap = max(0, config.innerGap + delta)
+        config.outerGap = max(0, config.outerGap + delta)
+        spaceyLog("Gaps: inner=\(config.innerGap) outer=\(config.outerGap)")
+        retile()
+    }
+
+    // MARK: - Split Ratio
+
+    private func adjustSplitRatio(by delta: CGFloat) {
+        layoutEngine.splitRatio = max(0.2, min(0.8, layoutEngine.splitRatio + delta))
+        spaceyLog("Split ratio: \(layoutEngine.splitRatio)")
+        retile()
+    }
+
+    // MARK: - Mouse Drag Resize
+
+    private func setupResizeMonitor() {
+        resizeMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            self?.handleResizeEvent(event)
+        }
+    }
+
+    private func stopResizeMonitor() {
+        if let monitor = resizeMonitor {
+            NSEvent.removeMonitor(monitor)
+            resizeMonitor = nil
+        }
+    }
+
+    private func handleResizeEvent(_ event: NSEvent) {
+        // Require Ctrl held to start a drag resize (prevents accidental triggers)
+        guard layoutEngine.tiledWindows.count >= 2 else { return }
+
+        let mouseLocation = NSEvent.mouseLocation
+        guard let primaryScreen = NSScreen.screens.first else { return }
+        let screenHeight = primaryScreen.frame.height
+        let axPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
+
+        let region = getTilingRegion()
+
+        switch event.type {
+        case .leftMouseDown:
+            // Only start resize if Ctrl is held
+            guard event.modifierFlags.contains(.control) else { return }
+
+            let isStacked = layoutEngine.layoutVariant == 1
+
+            if isStacked {
+                let splitY = region.y + region.height * layoutEngine.splitRatio
+                if abs(axPoint.y - splitY) < 20 {
+                    isResizing = true
+                    resizeStartPos = axPoint.y
+                    resizeInitialRatio = layoutEngine.splitRatio
+                }
+            } else {
+                let splitX = region.x + region.width * layoutEngine.splitRatio
+                if abs(axPoint.x - splitX) < 20 {
+                    isResizing = true
+                    resizeStartPos = axPoint.x
+                    resizeInitialRatio = layoutEngine.splitRatio
+                }
+            }
+
+        case .leftMouseDragged:
+            guard isResizing else { return }
+            let isStacked = layoutEngine.layoutVariant == 1
+
+            if isStacked {
+                let delta = axPoint.y - resizeStartPos
+                let ratioDelta = delta / region.height
+                layoutEngine.splitRatio = max(0.2, min(0.8, resizeInitialRatio + ratioDelta))
+            } else {
+                let delta = axPoint.x - resizeStartPos
+                let ratioDelta = delta / region.width
+                layoutEngine.splitRatio = max(0.2, min(0.8, resizeInitialRatio + ratioDelta))
+            }
+
+            // Snap frames instantly during drag (no animation)
+            let windows = layoutEngine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
+                guard let el = axElements[wid], let t = trackedWindows[wid] else { return nil }
+                return (wid, el, t.pid)
+            }
+            NativeTiling.applyLayout(
+                windows: windows, region: region, gap: config.innerGap,
+                singleWindowPadding: config.singleWindowPadding,
+                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant,
+                animate: false
+            )
+            let layouts = layoutEngine.calculateFrames(in: region)
+            updateBorders(layouts: layouts)
+            updateDimming(layouts: layouts)
+
+        case .leftMouseUp:
+            if isResizing {
+                isResizing = false
+            }
+
+        default:
+            break
+        }
+    }
+
+    // MARK: - Display Change
+
+    @objc private func displayConfigChanged(_ notification: Notification) {
+        spaceyLog("Display configuration changed, retiling")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.retile()
+        }
+    }
+
+    // MARK: - Focus Follows Mouse
+
+    private func startFocusFollowsMouse() {
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            self?.handleMouseMoved(event)
+        }
+    }
+
+    private func stopFocusFollowsMouse() {
+        if let monitor = mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            mouseMonitor = nil
+        }
+    }
+
+    private func handleMouseMoved(_ event: NSEvent) {
+        // Throttle: only check every 100ms
+        let now = Date()
+        guard now.timeIntervalSince(lastMouseFocusTime) > 0.1 else { return }
+        lastMouseFocusTime = now
+
+        let mouseLocation = NSEvent.mouseLocation
+        guard let primaryScreen = NSScreen.screens.first else { return }
+        let screenHeight = primaryScreen.frame.height
+        // Convert Cocoa coords to AX coords
+        let axPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
+
+        // Find which tiled window contains the cursor
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+        for (windowID, frame) in layouts {
+            if frame.contains(axPoint) && windowID != focusedWindowID {
+                if let element = axElements[windowID], let tracked = trackedWindows[windowID] {
+                    AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                    focusedWindowID = windowID
+                    updateBorders(layouts: layouts)
+                    updateDimming(layouts: layouts)
+                }
+                break
+            }
+        }
+    }
+
+    // MARK: - Dim Unfocused Windows (CGSSetWindowAlpha)
+
+    private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
+        let dimAmount = config.dimUnfocused
+        guard dimAmount > 0 else { restoreAllWindowAlpha(); return }
+
+        let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        let conn = CGSMainConnectionID()
+        let dimAlpha = CGFloat(1.0 - dimAmount)  // 0.3 config → 0.7 window alpha
+
+        // Restore windows no longer tiled or now focused
+        let tiledSet = Set(layoutEngine.tiledWindows)
+        for wid in dimmedWindows where !tiledSet.contains(wid) || wid == focusedID {
+            CGSSetWindowAlpha(conn, wid, 1.0)
+        }
+
+        // Apply dim to unfocused, full opacity to focused
+        var newDimmed = Set<CGWindowID>()
+        for wid in layoutEngine.tiledWindows {
+            if wid == focusedID {
+                CGSSetWindowAlpha(conn, wid, 1.0)
+            } else {
+                CGSSetWindowAlpha(conn, wid, dimAlpha)
+                newDimmed.insert(wid)
+            }
+        }
+        dimmedWindows = newDimmed
+    }
+
+    private func restoreAllWindowAlpha() {
+        guard !dimmedWindows.isEmpty else { return }
+        let conn = CGSMainConnectionID()
+        for wid in dimmedWindows { CGSSetWindowAlpha(conn, wid, 1.0) }
+        dimmedWindows.removeAll()
+    }
+
+    // MARK: - Virtual Workspace Switching
+
+    private func switchVirtualWorkspace(_ number: Int) {
+        guard number >= 1 && number <= 9 else { return }
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+
+        let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
+        guard number != currentWS else {
+            spaceyLog("Already on workspace \(number)")
+            return
+        }
+
+        // Save current state into WorkspaceManager
+        saveWorkspaceState(workspace: currentWS, monitor: monitorID)
+
+        // Switch: hides old windows, shows new windows
+        WorkspaceManager.shared.switchWorkspace(to: number, on: monitorID)
+
+        // Load new workspace state
+        loadWorkspaceState(workspace: number, monitor: monitorID)
+
+        retile()
+        onSpaceChange?()
+        spaceyLog("Switched to workspace \(number) on \(monitorID)")
+    }
+
+    private func moveToVirtualWorkspace(_ number: Int) {
+        guard number >= 1 && number <= 9 else { return }
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
+
+        guard number != currentWS else {
+            spaceyLog("Window already on workspace \(number)")
+            return
+        }
+
+        // Remove from current WM state
+        let wasTiled = layoutEngine.contains(windowID)
+        if wasTiled { layoutEngine.remove(windowID: windowID) }
+
+        let tracked = trackedWindows.removeValue(forKey: windowID)
+        let element = axElements.removeValue(forKey: windowID)
+        let wasFloating = floatingWindows.remove(windowID) != nil
+        let wasFullscreen = fullscreenWindows.remove(windowID) != nil
+        dimmedWindows.remove(windowID)
+
+        // Hide the window (move off-screen + alpha 0)
+        if let element = element {
+            AccessibilityBridge.setFrame(of: element, to: CGRect(x: 10000, y: 10000, width: 1, height: 1))
+        }
+        let conn = CGSMainConnectionID()
+        CGSSetWindowAlpha(conn, windowID, 0)
+
+        // Add to target workspace in WorkspaceManager
+        var targetWS = WorkspaceManager.shared.workspaces[monitorID]?[number] ?? VirtualWorkspace()
+        if let tracked = tracked {
+            targetWS.trackedWindows[windowID] = tracked
+        }
+        if let element = element {
+            targetWS.axElements[windowID] = element
+        }
+        if wasFloating {
+            targetWS.floatingWindows.insert(windowID)
+        } else if wasFullscreen {
+            targetWS.fullscreenWindows.insert(windowID)
+        } else if wasTiled {
+            targetWS.tiledWindows.append(windowID)
+        }
+        WorkspaceManager.shared.workspaces[monitorID, default: [:]][number] = targetWS
+
+        // Focus next window on current workspace
+        if focusedWindowID == windowID {
+            focusedWindowID = layoutEngine.tiledWindows.first
+            if let fid = focusedWindowID, let el = axElements[fid], let t = trackedWindows[fid] {
+                AccessibilityBridge.focus(window: el, pid: t.pid)
+            }
+        }
+
+        retile()
+        onSpaceChange?()
+        spaceyLog("Moved window \(windowID) to workspace \(number)")
+    }
+
+    private func saveWorkspaceState(workspace: Int, monitor: String) {
+        var ws = VirtualWorkspace()
+        ws.tiledWindows = layoutEngine.tiledWindows
+        ws.floatingWindows = floatingWindows
+        ws.fullscreenWindows = fullscreenWindows
+        ws.trackedWindows = trackedWindows
+        ws.axElements = axElements
+        ws.focusedWindowID = focusedWindowID
+        ws.layoutVariant = layoutEngine.layoutVariant
+        ws.splitRatio = layoutEngine.splitRatio
+        WorkspaceManager.shared.workspaces[monitor, default: [:]][workspace] = ws
+    }
+
+    private func loadWorkspaceState(workspace: Int, monitor: String) {
+        if let ws = WorkspaceManager.shared.workspaces[monitor]?[workspace] {
+            layoutEngine.tiledWindows = ws.tiledWindows
+            trackedWindows = ws.trackedWindows
+            axElements = ws.axElements
+            floatingWindows = ws.floatingWindows
+            fullscreenWindows = ws.fullscreenWindows
+            focusedWindowID = ws.focusedWindowID ?? ws.tiledWindows.first
+            layoutEngine.layoutVariant = ws.layoutVariant
+            layoutEngine.splitRatio = ws.splitRatio
+            observer.syncKnownWindows(Set(ws.trackedWindows.keys))
+        } else {
+            // Empty workspace — clear everything
+            layoutEngine.tiledWindows.removeAll()
+            trackedWindows.removeAll()
+            axElements.removeAll()
+            floatingWindows.removeAll()
+            fullscreenWindows.removeAll()
+            focusedWindowID = nil
+            observer.syncKnownWindows([])
+        }
+
+        // Focus the workspace's focused window
+        if let fid = focusedWindowID, let el = axElements[fid], let t = trackedWindows[fid] {
+            AccessibilityBridge.focus(window: el, pid: t.pid)
+        }
+    }
+
+    // MARK: - Helpers
+
+    func appMatchesRule(_ appName: String, bundleID: String?, rules: Set<String>) -> Bool {
+        if rules.contains(appName) { return true }
+        if let bid = bundleID, rules.contains(bid) { return true }
+        let lowered = appName.lowercased()
+        return rules.contains { $0.lowercased() == lowered }
+    }
+
+}
