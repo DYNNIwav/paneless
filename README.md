@@ -1,202 +1,258 @@
 # Spacey
 
-Hyprland-inspired tiling window manager for macOS. Uses native macOS Spaces (not virtual workspaces), auto-tiles windows with BSP/dwindle layout, and provides HJKL navigation.
+A fast tiling window manager for macOS with virtual workspaces, Hyprland-style dimming, and smooth animations.
 
-Works on macOS Sequoia with SIP enabled. No root access needed.
+Built with Swift using the Accessibility API and private CGS/SLS APIs. Works on macOS Sequoia without disabling SIP.
 
-## Install
+## Features
 
-```bash
-cd ~/Downloads/spacey
-./Scripts/build.sh
-./Scripts/install.sh   # installs to ~/Applications + /usr/local/bin/spacey
-```
+- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. No native Spaces animation delays.
+- **Automatic Tiling** — New windows are tiled automatically. 3 layout variants: side-by-side, stacked, and monocle.
+- **Smooth Animation** — 120fps ease-out cubic animation for window transitions. Optional native macOS compositor tiling (Sequoia+) for zero-redraw GPU animation.
+- **Window Dimming** — Unfocused tiled windows are dimmed with configurable opacity. Floating windows are never covered.
+- **Multi-Monitor** — Independent workspace sets per monitor. Focus and move windows between monitors with keybindings.
+- **Smart Auto-Float** — Dialogs, small windows, and secondary app windows are automatically floated. Configurable per-app rules.
+- **Window Borders** — Hyprland-style colored borders around the focused window.
+- **Focus Follows Mouse** — Optional: auto-focus the tiled window under the cursor.
+- **Mouse Drag Resize** — Ctrl+drag on the split divider to resize tiled windows.
+- **Menu Bar** — Shows layout, active workspace, and window title. Click to switch workspaces or cycle layouts.
+- **Configurable Keybindings** — All keybindings can be remapped via config file.
 
-To start at login: **System Settings > General > Login Items > add Spacey**
+## Requirements
+
+- macOS 14 (Sonoma) or later
+- Xcode Command Line Tools (for building)
 
 ### Required Permissions
 
 Grant both in **System Settings > Privacy & Security**:
 
-| Permission           | Why                            |
-| -------------------- | ------------------------------ |
-| **Accessibility**    | Move and resize windows        |
-| **Input Monitoring** | Global hotkeys (Alt+Shift+...) |
+| Permission | Why |
+|---|---|
+| **Accessibility** | Move and resize windows |
+| **Input Monitoring** | Global hotkeys |
 
-### Space Switching Setup
+## Installation
 
-To move windows between spaces AND switch to the target space, you need macOS keyboard shortcuts enabled:
+```bash
+git clone https://github.com/DYNNIwav/spacey.git
+cd spacey
+./Scripts/build.sh
+./Scripts/install.sh
+```
 
-1. **System Settings > Keyboard > Keyboard Shortcuts > Mission Control**
-2. Enable **"Switch to Desktop 1"** through **"Switch to Desktop 9"**
-3. Set the modifier to **Alt** (Option+1, Option+2, etc.)
+This installs `Spacey.app` to `~/Applications/` and the `spacey` CLI to `/usr/local/bin/`.
 
-Spacey defaults to Alt. If you use Ctrl instead, set it in the config:
+To start:
+
+```bash
+open ~/Applications/Spacey.app
+```
+
+To start at login: **System Settings > General > Login Items > add Spacey**.
+
+## Keybindings
+
+### Window Focus & Layout
+
+| Binding | Action |
+|---------|--------|
+| `Alt+Shift+H` | Focus previous window |
+| `Alt+Shift+L` | Focus next window |
+| `Alt+Shift+J` | Rotate windows forward |
+| `Alt+Shift+K` | Rotate windows backward |
+| `Alt+Shift+Enter` | Swap with master (first window) |
+| `Alt+Shift+Space` | Cycle layout (side-by-side / stacked / monocle) |
+| `Alt+Shift+T` | Toggle float |
+| `Alt+Shift+F` | Toggle fullscreen |
+| `Alt+Shift+Q` | Close focused window |
+
+### Window Positioning
+
+| Binding | Action |
+|---------|--------|
+| `Cmd+Shift+H` | Move to first position |
+| `Cmd+Shift+L` | Move to last position |
+| `Cmd+Shift+K` | Swap one position earlier |
+| `Cmd+Shift+J` | Swap one position later |
+| `Cmd+Shift+F` | Fill entire tiling region |
+
+### Sizing
+
+| Binding | Action |
+|---------|--------|
+| `Alt+Shift+]` | Grow focused (increase split ratio) |
+| `Alt+Shift+[` | Shrink focused (decrease split ratio) |
+| `Alt+Shift+=` | Increase gaps |
+| `Alt+Shift+-` | Decrease gaps |
+| `Ctrl+Drag` | Mouse drag resize on split divider |
+
+### Monitors
+
+| Binding | Action |
+|---------|--------|
+| `Alt+Shift+,` | Focus monitor left |
+| `Alt+Shift+.` | Focus monitor right |
+
+### Virtual Workspaces
+
+| Binding | Action |
+|---------|--------|
+| `Alt+1` ... `Alt+9` | Switch to workspace |
+| `Alt+Shift+1` ... `Alt+Shift+9` | Move focused window to workspace |
+
+Workspace keybindings are always active, even with a custom `[bindings]` section.
+
+## Layout Variants
+
+Cycle with `Alt+Shift+Space`:
+
+**Side-by-side** (`[]=`) — Master on the left, remaining windows stacked on the right.
+
+```
+2 windows:        3 windows:
++-----+-----+    +-----+-----+
+|     |     |    |     |  W2 |
+|  W1 |  W2 |    |  W1 +-----+
+|     |     |    |     |  W3 |
++-----+-----+    +-----+-----+
+```
+
+**Stacked** (`TTT`) — Windows stacked top to bottom.
+
+```
+2 windows:        3 windows:
++-----------+    +-----------+
+|    W1     |    |    W1     |
++-----------+    +-----------+
+|    W2     |    |    W2     |
++-----------+    +-----------+
+                 |    W3     |
+                 +-----------+
+```
+
+**Monocle** (`[M]`) — All windows fill the screen, overlapping. Only the focused window is visible.
+
+## Configuration
+
+Config file: `~/.config/spacey/config`
+
+A default config is created on first install. Edit it and Spacey auto-reloads on save.
 
 ```ini
 [layout]
-space_switch_modifier = alt   # default: alt
+inner_gap = 12
+outer_gap = 12
+sketchybar_height = 0
+dim_unfocused = 0.3
+single_window_padding = 20
+focus_follows_mouse = false
+native_animation = false
+auto_float_dialogs = true
+
+[border]
+enabled = false
+width = 2
+active_color = #66ccff
+inactive_color = #444444
+radius = 10
+
+[rules]
+float = Finder, System Settings, Calculator, Archive Utility
+# exclude = SomeApp
+
+[app_rules]
+# Pin apps to specific positions in the tiled layout
+# Arc = left
+# Ghostty = right
+
+# [bindings]
+# Custom keybindings override ALL defaults (except workspace switching).
+# Format: modifiers, key = action
+# alt+shift, h = focus_left
+# alt+shift, l = focus_right
+# alt+shift, j = focus_down
+# alt+shift, k = focus_up
+# alt+shift, return = swap_master
+# alt+shift, space = cycle_layout
+# alt+shift, t = toggle_float
+# alt+shift, f = toggle_fullscreen
+# alt+shift, q = close
 ```
 
-Without these shortcuts, Spacey can still move windows between spaces, but won't be able to switch the visible space automatically.
+### Config Reference
 
-## Keybinds
+| Section | Key | Default | Description |
+|---------|-----|---------|-------------|
+| layout | `inner_gap` | 8 | Gap between windows (px) |
+| layout | `outer_gap` | 8 | Gap between windows and screen edges (px) |
+| layout | `sketchybar_height` | 0 | Reserved height at top for status bars |
+| layout | `dim_unfocused` | 0 | Dim amount for unfocused windows (0.0 - 1.0) |
+| layout | `single_window_padding` | 0 | Extra padding when only 1 window is tiled |
+| layout | `focus_follows_mouse` | false | Focus window under cursor |
+| layout | `native_animation` | false | Use native macOS compositor tiling (Sequoia+, no gaps) |
+| layout | `auto_float_dialogs` | true | Auto-float dialogs and small windows |
+| border | `enabled` | false | Show window borders |
+| border | `width` | 2 | Border thickness (px) |
+| border | `active_color` | #66ccff | Focused window border color (hex) |
+| border | `inactive_color` | #444444 | Unfocused window border color (hex) |
+| border | `radius` | 10 | Border corner radius |
+| rules | `float` | Finder, System Settings, ... | Comma-separated apps that always float |
+| rules | `exclude` | *(empty)* | Comma-separated apps ignored by Spacey |
 
-All hotkeys use **Alt+Shift** as the modifier.
+### Bindable Actions
 
-### Window Management
+For use in the `[bindings]` section:
 
-| Keybind                         | Action                                               |
-| ------------------------------- | ---------------------------------------------------- |
-| `Alt+Shift+1` ... `Alt+Shift+9` | Move focused window to space 1-9 and switch there    |
-| `Alt+Shift+Q`                   | Close focused window                                 |
-| `Alt+Shift+Space`               | Toggle float (remove/add window from tiling)         |
-| `Alt+Shift+F`                   | Toggle fullscreen (window fills entire tiling area)  |
-| `Alt+Shift+Enter`               | Swap focused window with the master (largest) window |
-
-### Focus Navigation
-
-| Keybind       | Action                        |
-| ------------- | ----------------------------- |
-| `Alt+Shift+H` | Focus window to the **left**  |
-| `Alt+Shift+J` | Focus window **below**        |
-| `Alt+Shift+K` | Focus window **above**        |
-| `Alt+Shift+L` | Focus window to the **right** |
-
-### Layout Control
-
-| Keybind       | Action                                       |
-| ------------- | -------------------------------------------- |
-| `Alt+Shift+T` | Cycle layout mode (dwindle <-> master-stack) |
-| `Alt+Shift+M` | Increase master count (+1, max 5)            |
-| `Alt+Shift+N` | Decrease master count (-1, min 1)            |
-
-### Resize Mode
-
-| Keybind       | Action                 |
-| ------------- | ---------------------- |
-| `Alt+Shift+R` | **Enter** resize mode  |
-| `H`           | Shrink split leftward  |
-| `J`           | Shrink split downward  |
-| `K`           | Shrink split upward    |
-| `L`           | Expand split rightward |
-| `Escape`      | **Exit** resize mode   |
-
-In resize mode, HJKL adjusts the nearest split boundary. No modifier keys needed. Press Escape to return to normal mode.
-
-### Scratchpad
-
-| Keybind       | Action                       |
-| ------------- | ---------------------------- |
-| `Alt+Shift+S` | Toggle scratchpad visibility |
-
-The scratchpad is a hidden floating workspace (like Hyprland's special workspace). Windows in the scratchpad appear centered at 80% screen size when shown, and move off-screen when hidden. Configure which apps go to the scratchpad in the config file.
-
-## Menu Bar
-
-Spacey shows a bold **S** in the menu bar. Click it for:
-
-- **Layout: Dwindle/Master-Stack** - cycle layout mode
-- **Retile** - re-scan windows and re-apply tiling
-- **Reload Config** - reload `~/.config/spacey/config`
-- **Quit Spacey** - exit the app
+| Action | Description |
+|--------|-------------|
+| `focus_left` / `focus_right` / `focus_up` / `focus_down` | Focus window in direction |
+| `focus_next` / `focus_prev` | Cycle focus through tiled windows |
+| `swap_master` | Swap focused with first window |
+| `toggle_float` | Toggle floating on focused window |
+| `toggle_fullscreen` | Toggle fullscreen |
+| `close` | Close focused window |
+| `cycle_layout` | Cycle layout variant |
+| `rotate_next` / `rotate_prev` | Rotate window positions |
+| `position_left` / `position_right` / `position_up` / `position_down` | Move window in tiled list |
+| `position_fill` | Fill tiling region |
+| `position_center` | Center window at 60% width |
+| `increase_gap` / `decrease_gap` | Adjust gaps by 4px |
+| `grow_focused` / `shrink_focused` | Adjust split ratio by 5% |
+| `focus_monitor left` / `focus_monitor right` | Focus neighbor monitor |
+| `move_to_monitor left` / `move_to_monitor right` | Move window to neighbor monitor |
+| `switch_workspace N` | Switch to workspace N (1-9) |
+| `move_to_workspace N` | Move window to workspace N (1-9) |
+| `retile` | Reset layout and re-scan windows |
+| `reload_config` | Reload config file |
 
 ## CLI
 
-Spacey also works as a CLI tool (useful for Sketchybar integration):
+The `spacey` binary doubles as a CLI for scripting and integration:
 
 ```bash
-spacey --focus-space N      # Switch to space N
-spacey --move-to-space N    # Move focused window to space N
-spacey --list-spaces        # List all spaces
-spacey --help               # Show help
+spacey --focus-workspace 3       # Switch to workspace 3
+spacey --list-workspaces         # List workspaces with windows
+spacey --help                    # Show help
 ```
 
 ### Sketchybar Integration
 
-Replace `yabai` calls in your Sketchybar config:
+Replace `yabai -m space --focus N` with:
 
-```lua
--- Before:
-sbar.exec("yabai -m space --focus " .. env.SID)
--- After:
-sbar.exec("spacey --focus-space " .. env.SID)
-```
-
-## Config
-
-Edit `~/.config/spacey/config` (created on first install):
-
-```ini
-[layout]
-auto_ratio = true            # auto-adjust split ratio for your display aspect ratio
-# master_ratio = 0.50        # uncomment to manually set (overrides auto_ratio)
-sketchybar_height = 40       # pixels reserved at top for Sketchybar
-inner_gap = 8                # gap between windows (px)
-outer_gap = 8                # gap at screen edges (px)
-mode = dwindle               # dwindle or master-stack
-nmaster = 1                  # number of master windows
-animation_enabled = true     # smooth tiling animations
-animation_duration = 0.25    # animation duration in seconds
-# space_switch_modifier = alt   # alt (default) or ctrl
-
-[rules]
-float = Finder, System Settings, Calculator, Archive Utility
-exclude = Sketchybar
-scratchpad = Spotify
-# space.3 = Slack, Discord   # auto-move these apps to space 3
-```
-
-### Auto Ratio
-
-With `auto_ratio = true` (default), Spacey detects your display aspect ratio and adjusts the master/stack split:
-
-| Display                | Aspect Ratio | Auto Split |
-| ---------------------- | ------------ | ---------- |
-| Standard (16:9)        | 1.78         | 50/50      |
-| Wide                   | ~2.0         | 47/53      |
-| Ultrawide (21:9)       | 2.33         | 42/58      |
-| Super ultrawide (32:9) | 3.56         | 38/62      |
-
-Set `master_ratio` explicitly to override.
-
-## Layout Modes
-
-### Dwindle (default)
-
-Like Hyprland's dwindle layout. Each new window splits the focused window, alternating direction based on the region's aspect ratio:
-
-```
-1 window:     2 windows:        3 windows:          4 windows:
-+----------+  +-----+-----+    +-----+-----+    +-----+-----+
-|          |  |     |     |    |     |  W2 |    |     |  W2 |
-|    W1    |  |  W1 |  W2 |    |  W1 +-----+    |  W1 +--+--+
-|          |  |     |     |    |     |  W3 |    |     |W3|W4|
-+----------+  +-----+-----+    +-----+-----+    +-----+--+--+
-```
-
-### Master-Stack
-
-First split is always horizontal (master | stack), subsequent splits in the stack are vertical:
-
-```
-3 windows:          4 windows:
-+-----+-----+    +-----+-----+
-|     |  W2 |    |     |  W2 |
-|  W1 +-----+    |  W1 +-----+
-|     |  W3 |    |     |  W3 |
-+-----+-----+    |     +-----+
-                  |     |  W4 |
-                  +-----+-----+
+```bash
+spacey --focus-workspace N
 ```
 
 ## How It Works
 
-- **Private CGS APIs** (`CGSAddWindowsToSpaces` / `CGSRemoveWindowsFromSpaces`) move windows between real macOS Spaces. Same approach as Amethyst/yabai. Works on Sequoia without SIP.
-- **CGEventTap** captures global hotkeys at the session level.
-- **AXUIElement** (Accessibility API) reads and sets window frames.
-- **CVDisplayLink** syncs animations to your display's refresh rate (60Hz, 120Hz, ProMotion).
-- **BSP tree** (binary space partition) manages the tiling layout with value-semantic `indirect enum`.
+**Virtual workspaces** are implemented without native macOS Spaces. All windows live on a single Space. Switching workspaces hides windows by moving them off-screen (rift-style: bottom-right corner, 1px visible) and shows the target workspace's windows by restoring their positions. All moves are batched with `SLSDisableUpdate`/`SLSReenableUpdate` to prevent flickering.
+
+**Window dimming** uses transparent NSWindow overlays positioned directly above each unfocused tiled window via `CGSOrderWindow`. Floating windows are never covered by dim overlays.
+
+**Animation** interpolates window frames at 120fps using a DispatchSource timer with ease-out cubic easing. New windows are pre-positioned at their target frame before animation starts to prevent visual flashing.
+
+**Window detection** uses adaptive polling (0.5s during activity, 3s when idle) supplemented by AX observer callbacks for immediate notification of window creation, destruction, and focus changes.
 
 ## Uninstall
 
@@ -205,3 +261,11 @@ rm -rf ~/Applications/Spacey.app
 sudo rm -f /usr/local/bin/spacey
 rm -rf ~/.config/spacey
 ```
+
+## Acknowledgements
+
+Inspired by [Hyprland](https://hyprland.org/), [AeroSpace](https://github.com/nikitabobko/AeroSpace), [yabai](https://github.com/koekeishiya/yabai), [Amethyst](https://github.com/ianyh/Amethyst), and [rift](https://github.com/acsandmann/rift).
+
+## License
+
+MIT
