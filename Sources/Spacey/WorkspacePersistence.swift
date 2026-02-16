@@ -204,27 +204,51 @@ enum WorkspacePersistence {
     }
 
     private static func findMatchingWindow(saved: SavedWindow, in wm: WindowManager) -> CGWindowID? {
-        // Best match: same app + same title
+        var bestMatch: (wid: CGWindowID, score: Double) = (0, -1)
+
         for (wid, tracked) in wm.trackedWindows {
             let appMatch = tracked.appName == saved.appName
                 || (tracked.bundleID != nil && tracked.bundleID == saved.bundleID)
+            guard appMatch else { continue }
 
-            if appMatch {
-                if let element = wm.axElements[wid],
-                   let title = AccessibilityBridge.getTitle(of: element),
-                   title == saved.windowTitle {
-                    return wid
+            // Exact title match — best possible
+            if let element = wm.axElements[wid],
+               let title = AccessibilityBridge.getTitle(of: element),
+               title == saved.windowTitle {
+                return wid
+            }
+
+            // Fuzzy title match via Jaccard word similarity
+            if let savedTitle = saved.windowTitle,
+               let element = wm.axElements[wid],
+               let title = AccessibilityBridge.getTitle(of: element) {
+                let similarity = jaccardSimilarity(title, savedTitle)
+                if similarity > bestMatch.score {
+                    bestMatch = (wid, similarity)
                 }
+            } else if bestMatch.score < 0 {
+                // No title to compare — app-only match as fallback
+                bestMatch = (wid, 0)
             }
         }
 
-        // Fallback: same app name or bundle ID (for windows whose titles changed)
-        for (wid, tracked) in wm.trackedWindows {
-            let appMatch = tracked.appName == saved.appName
-                || (tracked.bundleID != nil && tracked.bundleID == saved.bundleID)
-            if appMatch { return wid }
+        // Accept fuzzy matches with any word overlap (score > 0),
+        // or fall back to app-only match (score == 0)
+        if bestMatch.score >= 0 {
+            return bestMatch.wid
         }
 
         return nil
+    }
+
+    /// Jaccard similarity on word sets: |intersection| / |union|.
+    /// Returns 0.0 for no overlap, 1.0 for identical word sets.
+    private static func jaccardSimilarity(_ a: String, _ b: String) -> Double {
+        let wordsA = Set(a.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        let wordsB = Set(b.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        guard !wordsA.isEmpty || !wordsB.isEmpty else { return 0 }
+        let intersection = wordsA.intersection(wordsB).count
+        let union = wordsA.union(wordsB).count
+        return Double(intersection) / Double(union)
     }
 }

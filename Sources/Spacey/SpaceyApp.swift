@@ -284,17 +284,22 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             .font: monoFont, .foregroundColor: theme.layoutColor
         ]))
 
-        // Virtual workspace numbers
+        // Virtual workspace numbers (with optional names)
         for (idx, wsNum) in visibleWorkspaces.enumerated() {
             let isActive = wsNum == activeWS
-            let num = "\(wsNum)"
+            let label: String
+            if let name = wm.config.workspaceNames[wsNum] {
+                label = "\(wsNum):\(name)"
+            } else {
+                label = "\(wsNum)"
+            }
 
             if isActive {
-                result.append(NSAttributedString(string: num, attributes: [
+                result.append(NSAttributedString(string: label, attributes: [
                     .font: monoBold, .foregroundColor: theme.activeWorkspaceColor
                 ]))
             } else {
-                result.append(NSAttributedString(string: num, attributes: [
+                result.append(NSAttributedString(string: label, attributes: [
                     .font: monoFont, .foregroundColor: theme.inactiveWorkspaceColor
                 ]))
             }
@@ -342,7 +347,6 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             [layout]
             inner_gap = 8
             outer_gap = 8
-            sketchybar_height = 0
 
             [border]
             enabled = false
@@ -353,6 +357,12 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
             [rules]
             float = Finder, System Settings, Calculator, Archive Utility, System Preferences
+
+            # [workspaces]
+            # 1 = Main
+            # 2 = Browser
+            # 3 = Chat
+
             # [bindings]
             # alt+shift, h = focus_left
             # alt+shift, l = focus_right
@@ -360,6 +370,8 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             # alt+shift, space = toggle_float
             # alt+shift, f = toggle_fullscreen
             # alt+shift, q = close
+            # alt+shift, m = set_mark a
+            # alt+shift, quote = jump_mark a
             """
             try? defaultConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
         }
@@ -453,7 +465,13 @@ extension SpaceyAppDelegate: NSMenuDelegate {
             let isActive = wsNum == activeWS
             let count = wsMgr.windowCount(workspace: wsNum, on: monitorID)
             let countStr = count > 0 ? " (\(count))" : ""
-            let title = isActive ? "● Workspace \(wsNum)\(countStr)" : "○ Workspace \(wsNum)\(countStr)"
+            let nameStr: String
+            if let name = wm.config.workspaceNames[wsNum] {
+                nameStr = "Workspace \(wsNum): \(name)"
+            } else {
+                nameStr = "Workspace \(wsNum)"
+            }
+            let title = isActive ? "● \(nameStr)\(countStr)" : "○ \(nameStr)\(countStr)"
 
             let item = NSMenuItem(title: title, action: #selector(switchToWorkspace(_:)), keyEquivalent: "")
             item.target = self

@@ -3,7 +3,6 @@ import Cocoa
 struct SpaceyConfig {
     var innerGap: CGFloat = 8
     var outerGap: CGFloat = 8
-    var sketchybarHeight: CGFloat = 0
     var spaceSwitchModifier: String = "alt"
 
     // Auto-float dialogs and small windows
@@ -49,6 +48,9 @@ struct SpaceyConfig {
 
     // Sticky apps (visible on ALL workspaces)
     var stickyApps: Set<String> = []
+
+    // Named workspaces (e.g. 1 -> "Main", 2 -> "Browser")
+    var workspaceNames: [Int: String] = [:]
 
     // Keybindings (populated from config or defaults)
     var keyBindings: [KeyBinding] = []
@@ -164,7 +166,6 @@ struct SpaceyConfig {
                 switch key {
                 case "inner_gap": config.innerGap = CGFloat(Double(value) ?? 8)
                 case "outer_gap": config.outerGap = CGFloat(Double(value) ?? 8)
-                case "sketchybar_height": config.sketchybarHeight = CGFloat(Double(value) ?? 0)
                 case "space_switch_modifier": config.spaceSwitchModifier = value.lowercased()
                 case "auto_float_dialogs": config.autoFloatDialogs = value != "false" && value != "0"
                 case "single_window_padding": config.singleWindowPadding = CGFloat(Double(value) ?? 0)
@@ -206,6 +207,11 @@ struct SpaceyConfig {
                     config.appWorkspaceRules[key] = n
                 } else {
                     config.appLayoutRules[key] = lowerValue
+                }
+
+            case "workspaces":
+                if let n = Int(key), n >= 1, n <= 9 {
+                    config.workspaceNames[n] = value
                 }
 
             case "bindings":
@@ -253,7 +259,6 @@ struct SpaceyConfig {
             "keychain access": "com.apple.keychainaccess",
             "screenshot": "com.apple.Screenshot",
             "preview": "com.apple.Preview",
-            "sketchybar": "com.felixkratz.sketchybar",
         ]
         var result = Set<String>()
         for app in apps {
@@ -346,6 +351,12 @@ struct SpaceyConfig {
             return nil
         case "minimize": return .minimizeToWorkspace
         case "toggle_scratchpad": return .toggleScratchpad
+        case "set_mark":
+            if let key = arg, !key.isEmpty { return .setMark(key) }
+            return nil
+        case "jump_mark":
+            if let key = arg, !key.isEmpty { return .jumpToMark(key) }
+            return nil
         default: return nil
         }
     }

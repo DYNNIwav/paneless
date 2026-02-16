@@ -6,13 +6,14 @@ Built with Swift using the Accessibility API and private CGS/SLS APIs. Works on 
 
 ## Features
 
-- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. No native Spaces animation delays.
+- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. Optional named workspaces (e.g., "1:Main"). No native Spaces animation delays.
 - **Automatic Tiling** — New windows are tiled automatically. 3 layout variants: side-by-side, stacked, and monocle.
 - **Hyprland-Style Animation** — GPU-composited animations using SLSSetWindowTransform (same technique as yabai). Exact Hyprland bezier curves and timing. New windows scale in (popin 87%), closing windows fade + shrink. Configurable: `animations = false` to disable.
 - **Window Dimming** — Unfocused tiled windows are dimmed with configurable opacity. Floating windows are never covered.
 - **Multi-Monitor** — Independent workspace sets per monitor. Focus and move windows between monitors with keybindings.
 - **Smart Auto-Float** — Dialogs, small windows, and secondary app windows are automatically floated. Configurable per-app rules.
 - **Sticky Windows** — Pin apps (e.g. Spotify) to be visible on ALL workspaces.
+- **Window Marks** — Vim-style marks: tag any window and jump to it instantly, even across workspaces.
 - **Scratchpad** — Toggle a drop-down terminal (Ghostty) with Alt+Shift+G.
 - **Minimize to Workspace** — Alt+Shift+M hides window, Alt+Shift+number to restore.
 - **Window Borders** — Hyprland-style colored borders around the focused window.
@@ -147,7 +148,6 @@ A default config is created on first install. Edit it and Spacey auto-reloads on
 [layout]
 inner_gap = 12
 outer_gap = 12
-sketchybar_height = 0
 dim_unfocused = 0.3
 single_window_padding = 20
 focus_follows_mouse = false
@@ -170,6 +170,11 @@ float = Finder, System Settings, Calculator, Archive Utility
 # Arc = left
 # Ghostty = right
 
+# [workspaces]
+# 1 = Main
+# 2 = Browser
+# 3 = Chat
+
 # [bindings]
 # Custom keybindings override ALL defaults (except workspace switching).
 # Format: modifiers, key = action
@@ -190,7 +195,6 @@ float = Finder, System Settings, Calculator, Archive Utility
 |---------|-----|---------|-------------|
 | layout | `inner_gap` | 8 | Gap between windows (px) |
 | layout | `outer_gap` | 8 | Gap between windows and screen edges (px) |
-| layout | `sketchybar_height` | 0 | Reserved height at top for status bars |
 | layout | `dim_unfocused` | 0 | Dim amount for unfocused windows (0.0 - 1.0) |
 | layout | `single_window_padding` | 0 | Extra padding when only 1 window is tiled |
 | layout | `focus_follows_mouse` | false | Focus window under cursor |
@@ -209,6 +213,7 @@ float = Finder, System Settings, Calculator, Archive Utility
 | app_rules | `App = left` | | Pin app to first tiled position |
 | app_rules | `App = right` | | Pin app to last tiled position |
 | app_rules | `App = workspace N` | | Auto-assign app to workspace N |
+| workspaces | `N = Name` | | Label workspace N (shown in menu bar and dropdown) |
 
 ### Bindable Actions
 
@@ -235,6 +240,8 @@ For use in the `[bindings]` section:
 | `move_to_workspace N` | Move window to workspace N (1-9) |
 | `retile` | Reset layout and re-scan windows |
 | `reload_config` | Reload config file |
+| `set_mark X` | Mark focused window as "X" (vim-style) |
+| `jump_mark X` | Jump to window marked "X" (switches workspace if needed) |
 
 ## CLI
 
@@ -244,14 +251,6 @@ The `spacey` binary doubles as a CLI for scripting and integration:
 spacey --focus-workspace 3       # Switch to workspace 3
 spacey --list-workspaces         # List workspaces with windows
 spacey --help                    # Show help
-```
-
-### Sketchybar Integration
-
-Replace `yabai -m space --focus N` with:
-
-```bash
-spacey --focus-workspace N
 ```
 
 ## How It Works

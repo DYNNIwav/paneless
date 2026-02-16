@@ -36,6 +36,9 @@ class WindowManager: WindowObserverDelegate {
     private var scratchpadWindowID: CGWindowID?
     private var scratchpadVisible = false
 
+    // Window marks (vim-style: key -> windowID)
+    private var windowMarks: [String: CGWindowID] = [:]
+
     // Per-workspace layout memory
     private var workspaceLayouts: [String: Int] = [:]  // "monitorID-wsNum" -> layoutVariant
 
@@ -171,6 +174,8 @@ class WindowManager: WindowObserverDelegate {
         case .moveToWorkspace(let n):       moveToVirtualWorkspace(n)
         case .minimizeToWorkspace:          minimizeFocused()
         case .toggleScratchpad:             toggleScratchpad()
+        case .setMark(let key):             setWindowMark(key)
+        case .jumpToMark(let key):          jumpToWindowMark(key)
         }
     }
 
@@ -605,9 +610,9 @@ class WindowManager: WindowObserverDelegate {
 
         return TilingRegion(
             x: visibleFrame.origin.x + gap,
-            y: axY + config.sketchybarHeight + gap,
+            y: axY + gap,
             width: visibleFrame.size.width - gap * 2,
-            height: visibleFrame.size.height - config.sketchybarHeight - gap * 2
+            height: visibleFrame.size.height - gap * 2
         )
     }
 
@@ -869,6 +874,9 @@ class WindowManager: WindowObserverDelegate {
 
         // Clean up minimized state
         minimizedWindows.remove(windowID)
+
+        // Clean up any marks pointing to this window
+        windowMarks = windowMarks.filter { $0.value != windowID }
 
         let destroyedPid = trackedWindows[windowID]?.pid
 
@@ -1566,6 +1574,56 @@ class WindowManager: WindowObserverDelegate {
                 }
             }
         }
+    }
+
+    // MARK: - Window Marks (vim-style)
+
+    private func setWindowMark(_ key: String) {
+        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        windowMarks[key] = windowID
+        let appName = trackedWindows[windowID]?.appName ?? "unknown"
+        spaceyLog("Mark '\(key)' set on window \(windowID) (\(appName))")
+    }
+
+    private func jumpToWindowMark(_ key: String) {
+        guard let windowID = windowMarks[key] else {
+            spaceyLog("No mark '\(key)' set")
+            return
+        }
+
+        // If the window is on the current workspace, just focus it
+        if let element = axElements[windowID], let tracked = trackedWindows[windowID] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+            focusedWindowID = windowID
+            let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+            updateBorders(layouts: layouts)
+            updateDimming(layouts: layouts)
+            flashFocusedWindow()
+            onFocusChange?()
+            return
+        }
+
+        // Window might be on another workspace — find it
+        let screen = NSScreen.safeMain
+        let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        if let wsNum = WorkspaceManager.shared.findWorkspace(for: windowID, on: monitorID) {
+            switchVirtualWorkspace(wsNum)
+            // After switching, focus the marked window
+            if let element = axElements[windowID], let tracked = trackedWindows[windowID] {
+                AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                focusedWindowID = windowID
+                let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+                updateBorders(layouts: layouts)
+                updateDimming(layouts: layouts)
+                flashFocusedWindow()
+                onFocusChange?()
+            }
+            return
+        }
+
+        // Mark is stale (window no longer exists)
+        windowMarks.removeValue(forKey: key)
+        spaceyLog("Mark '\(key)' was stale — window no longer exists")
     }
 
     // MARK: - Virtual Workspace Switching
