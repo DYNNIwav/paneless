@@ -46,7 +46,11 @@ brew tap DYNNIwav/paneless
 brew install --HEAD paneless
 ```
 
-This installs the CLI and automatically symlinks `Paneless.app` to `~/Applications`.
+Then add the app to your Applications folder (printed in caveats after install):
+
+```bash
+ln -sf $(brew --prefix)/opt/paneless/Paneless.app ~/Applications/Paneless.app
+```
 
 To upgrade to the latest version:
 
