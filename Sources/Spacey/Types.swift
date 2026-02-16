@@ -1,5 +1,14 @@
 import Cocoa
 
+// MARK: - Screen Helpers
+
+extension NSScreen {
+    /// Safe accessor that never force-unwraps. Falls back to a dummy frame on headless systems.
+    static var safeMain: NSScreen {
+        NSScreen.main ?? NSScreen.screens.first ?? NSScreen()
+    }
+}
+
 // MARK: - CGS Private API Types
 
 typealias CGSConnectionID = UInt32

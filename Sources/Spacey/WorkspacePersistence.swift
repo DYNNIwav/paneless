@@ -144,7 +144,7 @@ enum WorkspacePersistence {
         let wm = WindowManager.shared
         let wsMgr = WorkspaceManager.shared
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = wsMgr.screenID(for: screen)
         let screenFrame = wm.screenFrameInAX(for: screen)
 

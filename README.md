@@ -8,13 +8,17 @@ Built with Swift using the Accessibility API and private CGS/SLS APIs. Works on 
 
 - **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. No native Spaces animation delays.
 - **Automatic Tiling** — New windows are tiled automatically. 3 layout variants: side-by-side, stacked, and monocle.
-- **Smooth Animation** — 120fps ease-out cubic animation for window transitions. Optional native macOS compositor tiling (Sequoia+) for zero-redraw GPU animation.
+- **Hyprland-Style Animation** — GPU-composited animations using SLSSetWindowTransform (same technique as yabai). Exact Hyprland bezier curves and timing. New windows scale in (popin 87%), closing windows fade + shrink. Configurable: `animations = false` to disable.
 - **Window Dimming** — Unfocused tiled windows are dimmed with configurable opacity. Floating windows are never covered.
 - **Multi-Monitor** — Independent workspace sets per monitor. Focus and move windows between monitors with keybindings.
 - **Smart Auto-Float** — Dialogs, small windows, and secondary app windows are automatically floated. Configurable per-app rules.
+- **Sticky Windows** — Pin apps (e.g. Spotify) to be visible on ALL workspaces.
+- **Scratchpad** — Toggle a drop-down terminal (Ghostty) with Alt+Shift+G.
+- **Minimize to Workspace** — Alt+Shift+M hides window, Alt+Shift+number to restore.
 - **Window Borders** — Hyprland-style colored borders around the focused window.
 - **Focus Follows Mouse** — Optional: auto-focus the tiled window under the cursor.
 - **Mouse Drag Resize** — Ctrl+drag on the split divider to resize tiled windows.
+- **Crash Recovery** — Orphaned windows from a previous crash are restored on startup. Workspace assignments persist across sessions.
 - **Menu Bar** — Shows layout, active workspace, and window title. Click to switch workspaces or cycle layouts.
 - **Configurable Keybindings** — All keybindings can be remapped via config file.
 
@@ -190,8 +194,10 @@ float = Finder, System Settings, Calculator, Archive Utility
 | layout | `dim_unfocused` | 0 | Dim amount for unfocused windows (0.0 - 1.0) |
 | layout | `single_window_padding` | 0 | Extra padding when only 1 window is tiled |
 | layout | `focus_follows_mouse` | false | Focus window under cursor |
+| layout | `animations` | true | GPU-composited Hyprland-style animations (set false for instant) |
 | layout | `native_animation` | false | Use native macOS compositor tiling (Sequoia+, no gaps) |
 | layout | `auto_float_dialogs` | true | Auto-float dialogs and small windows |
+| layout | `force_promotion` | false | Force ProMotion to stay at 120Hz |
 | border | `enabled` | false | Show window borders |
 | border | `width` | 2 | Border thickness (px) |
 | border | `active_color` | #66ccff | Focused window border color (hex) |
@@ -199,6 +205,10 @@ float = Finder, System Settings, Calculator, Archive Utility
 | border | `radius` | 10 | Border corner radius |
 | rules | `float` | Finder, System Settings, ... | Comma-separated apps that always float |
 | rules | `exclude` | *(empty)* | Comma-separated apps ignored by Spacey |
+| rules | `sticky` | *(empty)* | Comma-separated apps visible on ALL workspaces |
+| app_rules | `App = left` | | Pin app to first tiled position |
+| app_rules | `App = right` | | Pin app to last tiled position |
+| app_rules | `App = workspace N` | | Auto-assign app to workspace N |
 
 ### Bindable Actions
 
@@ -250,9 +260,9 @@ spacey --focus-workspace N
 
 **Window dimming** uses transparent NSWindow overlays positioned directly above each unfocused tiled window via `CGSOrderWindow`. Floating windows are never covered by dim overlays.
 
-**Animation** interpolates window frames at 120fps using a DispatchSource timer with ease-out cubic easing. New windows are pre-positioned at their target frame before animation starts to prevent visual flashing.
+**Animation** uses GPU-composited transforms (`SLSSetWindowTransform`) — the same technique as yabai. Windows are set to their final position via one batched AX call, then a reverse affine transform is applied so they visually appear at the start position. The transform animates back to identity at 120fps using Hyprland's exact cubic bezier curves (easeOutQuint). This means zero AX IPC per animation frame — all visual work is done by the compositor.
 
-**Window detection** uses adaptive polling (0.5s during activity, 3s when idle) supplemented by AX observer callbacks for immediate notification of window creation, destruction, and focus changes.
+**Window detection** uses a 3-layer system: (1) a background-thread CGWindowList interceptor polling at 8ms during app launches that hides windows before they render, (2) AX observer callbacks that hide windows immediately in the callback thread, and (3) adaptive main-thread polling (0.5s active, 3s idle) as a fallback. New windows are hidden (alpha=0) at detection and faded in with a Hyprland-style popin animation at their tiled position.
 
 ## Uninstall
 

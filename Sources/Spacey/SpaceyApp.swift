@@ -78,6 +78,16 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             self?.scheduleStatusBarUpdate()
         }
         WindowManager.shared.start()
+
+        // Check if Input Monitoring was granted (event tap created successfully).
+        // Unlike Accessibility, there's no system API to prompt for it — we
+        // detect the failure and guide the user to System Settings.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            if !WindowManager.shared.eventTap.isActive {
+                spaceyLog("Input Monitoring permission not granted. Keybindings will not work.")
+                self?.showInputMonitoringWarning()
+            }
+        }
         startConfigWatcher()
         updateStatusBar()
     }
@@ -224,7 +234,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         let wm = WindowManager.shared
         let wsMgr = WorkspaceManager.shared
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = wsMgr.screenID(for: screen)
         let activeWS = wsMgr.activeWorkspace[monitorID] ?? 1
 
@@ -363,6 +373,34 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func openInputMonitoringSettings(_ sender: NSMenuItem) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func showInputMonitoringWarning() {
+        // Add warning to menu bar
+        guard let button = statusItem?.button else { return }
+        let current = button.attributedTitle
+        let warning = NSMutableAttributedString(attributedString: current)
+        warning.append(NSAttributedString(string: "  No Keys", attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.systemOrange
+        ]))
+        button.attributedTitle = warning
+
+        // Add menu item for granting permission
+        if let menu = statusItem?.menu {
+            let inputItem = NSMenuItem(title: "Grant Input Monitoring...", action: #selector(openInputMonitoringSettings(_:)), keyEquivalent: "")
+            inputItem.target = self
+            // Insert before Quit
+            let quitIdx = menu.items.firstIndex(where: { $0.title == "Quit Spacey" }) ?? menu.items.count
+            menu.insertItem(inputItem, at: quitIdx)
+            menu.insertItem(NSMenuItem.separator(), at: quitIdx)
+        }
+    }
+
     @objc private func quit(_ sender: NSMenuItem) {
         NSApplication.shared.terminate(nil)
     }
@@ -378,7 +416,7 @@ extension SpaceyAppDelegate: NSMenuDelegate {
         let wm = WindowManager.shared
         let wsMgr = WorkspaceManager.shared
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = wsMgr.screenID(for: screen)
         let activeWS = wsMgr.activeWorkspace[monitorID] ?? 1
 

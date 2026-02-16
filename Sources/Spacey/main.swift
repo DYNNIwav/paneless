@@ -42,7 +42,7 @@ if CommandLine.arguments.count >= 2 {
             fputs("WARNING: --list-spaces is deprecated, use --list-workspaces instead\n", stderr)
         }
         let wsMgr = WorkspaceManager.shared
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = wsMgr.screenID(for: screen)
         let activeWS = wsMgr.activeWorkspace[monitorID] ?? 1
         for n in 1...9 {

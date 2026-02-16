@@ -57,6 +57,7 @@ class WindowManager: WindowObserverDelegate {
     func start() {
         BorderManager.shared.config = config.border
         eventTap.keyBindings = config.keyBindings
+        Animator.shared.enabled = config.animations
 
         observer.delegate = self
         observer.start()
@@ -76,7 +77,7 @@ class WindowManager: WindowObserverDelegate {
         Animator.shared.resetTransforms(for: allWindowIDs)
 
         // Initialize virtual workspace 1 with the scanned windows
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         WorkspaceManager.shared.activeWorkspace[monitorID] = 1
         saveWorkspaceState(workspace: 1, monitor: monitorID)
@@ -117,7 +118,7 @@ class WindowManager: WindowObserverDelegate {
 
     func stop() {
         // Save workspace state before shutting down
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
         saveWorkspaceState(workspace: currentWS, monitor: monitorID)
@@ -328,7 +329,7 @@ class WindowManager: WindowObserverDelegate {
             fullscreenWindows.insert(windowID)
             layoutEngine.remove(windowID: windowID)
             // Use the full visible screen (menu bar + dock respected, no Spacey gaps)
-            let screen = NSScreen.main ?? NSScreen.screens.first!
+            let screen = NSScreen.safeMain
             let visibleFrame = screen.visibleFrame
             let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
             let axY = primaryHeight - visibleFrame.origin.y - visibleFrame.size.height
@@ -408,7 +409,53 @@ class WindowManager: WindowObserverDelegate {
         guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
               let element = axElements[windowID]
         else { return }
-        AccessibilityBridge.close(window: element)
+
+        let wasTiled = layoutEngine.contains(windowID)
+        let closingFrame = AccessibilityBridge.getFrame(of: element) ?? .zero
+
+        if wasTiled && closingFrame != .zero {
+            // Animated close: scale down + fade the closing window
+            // while remaining windows redistribute simultaneously
+
+            // Remove from layout so we can calculate remaining layout
+            layoutEngine.remove(windowID: windowID)
+
+            // Build transitions for remaining windows
+            let region = getTilingRegion()
+            let windows = layoutEngine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
+                guard let el = axElements[wid], let t = trackedWindows[wid] else { return nil }
+                return (wid, el, t.pid)
+            }
+            let targetFrames = NativeTiling.calculateFrames(
+                count: windows.count, region: region, gap: config.innerGap,
+                singleWindowPadding: config.singleWindowPadding,
+                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+            )
+
+            var transitions: [Animator.Transition] = []
+            for (i, w) in windows.enumerated() where i < targetFrames.count {
+                let currentFrame = AccessibilityBridge.getFrame(of: w.element) ?? targetFrames[i]
+                transitions.append(Animator.Transition(
+                    windowID: w.windowID, element: w.element,
+                    startFrame: currentFrame, targetFrame: targetFrames[i]
+                ))
+            }
+
+            // Animate close + redistribute, then actually close the window
+            Animator.shared.animateWithClose(
+                redistributeTransitions: transitions,
+                closingWindowID: windowID,
+                closingFrame: closingFrame
+            ) { [weak self] in
+                AccessibilityBridge.close(window: element)
+                // Restore alpha in case the window survives (e.g. "Save?" dialog)
+                let conn = CGSMainConnectionID()
+                CGSSetWindowAlpha(conn, windowID, 1.0)
+                self?.windowDestroyed(windowID: windowID)
+            }
+        } else {
+            AccessibilityBridge.close(window: element)
+        }
     }
 
     // MARK: - Config Reload
@@ -429,6 +476,9 @@ class WindowManager: WindowObserverDelegate {
         if config.dimUnfocused <= 0 {
             restoreAllDimming()
         }
+
+        // Update animations
+        Animator.shared.enabled = config.animations
 
         // Update ProMotion forcing
         if config.forceProMotion {
@@ -484,6 +534,57 @@ class WindowManager: WindowObserverDelegate {
                 splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
             )
         }
+
+        let layouts = layoutEngine.calculateFrames(in: region)
+        updateBorders(layouts: layouts)
+        updateDimming(layouts: layouts)
+    }
+
+    /// Retile with a scale-in effect for a newly created window.
+    /// Avoids redundant AX getFrame calls by using calculated start frames directly.
+    private func retileWithScaleIn(newWindowID: CGWindowID) {
+        let windows = layoutEngine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
+            guard let el = axElements[wid], let t = trackedWindows[wid] else { return nil }
+            return (wid, el, t.pid)
+        }
+        guard !windows.isEmpty else { return }
+
+        let region = getTilingRegion()
+        let targetFrames = NativeTiling.calculateFrames(
+            count: windows.count, region: region, gap: config.innerGap,
+            singleWindowPadding: config.singleWindowPadding,
+            splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+        )
+
+        var transitions: [Animator.Transition] = []
+        for (i, w) in windows.enumerated() where i < targetFrames.count {
+            let target = targetFrames[i]
+
+            let startFrame: CGRect
+            let isNew: Bool
+            if w.windowID == newWindowID {
+                // New window: start from 87% centered — Hyprland popin 87% effect
+                let scale: CGFloat = 0.87
+                startFrame = CGRect(
+                    x: target.midX - target.width * scale / 2,
+                    y: target.midY - target.height * scale / 2,
+                    width: target.width * scale,
+                    height: target.height * scale
+                )
+                isNew = true
+            } else {
+                startFrame = AccessibilityBridge.getFrame(of: w.element) ?? target
+                isNew = false
+            }
+
+            transitions.append(Animator.Transition(
+                windowID: w.windowID, element: w.element,
+                startFrame: startFrame, targetFrame: target,
+                isNewWindow: isNew
+            ))
+        }
+
+        Animator.shared.animate(transitions)
 
         let layouts = layoutEngine.calculateFrames(in: region)
         updateBorders(layouts: layouts)
@@ -591,12 +692,28 @@ class WindowManager: WindowObserverDelegate {
 
     // MARK: - WindowObserverDelegate
 
+    /// Restore window alpha that was pre-emptively set to 0 by the AX observer.
+    /// Called for windows that won't be animated (floating, excluded, etc.).
+    private func restoreWindowAlpha(_ windowID: CGWindowID) {
+        let conn = CGSMainConnectionID()
+        CGSSetWindowAlpha(conn, windowID, 1.0)
+    }
+
     func windowCreated(windowID: CGWindowID, pid: pid_t, appName: String) {
-        guard trackedWindows[windowID] == nil else { return }
+        guard trackedWindows[windowID] == nil else {
+            restoreWindowAlpha(windowID)
+            return
+        }
         // Skip windows hidden on other virtual workspaces
-        guard !WorkspaceManager.shared.isWindowHiddenOnOtherWorkspace(windowID) else { return }
+        guard !WorkspaceManager.shared.isWindowHiddenOnOtherWorkspace(windowID) else {
+            restoreWindowAlpha(windowID)
+            return
+        }
         let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-        guard !appMatchesRule(appName, bundleID: bundleID, rules: config.excludeApps) else { return }
+        guard !appMatchesRule(appName, bundleID: bundleID, rules: config.excludeApps) else {
+            restoreWindowAlpha(windowID)
+            return
+        }
 
         var shouldFloat = appMatchesRule(appName, bundleID: bundleID, rules: config.floatApps)
 
@@ -618,7 +735,10 @@ class WindowManager: WindowObserverDelegate {
 
         // Check if this is the scratchpad window we just launched
         checkScratchpadPending(windowID: windowID, appName: appName, bundleID: bundleID)
-        if scratchpadWindowID == windowID { return }  // Scratchpad handles its own setup
+        if scratchpadWindowID == windowID {
+            restoreWindowAlpha(windowID)
+            return  // Scratchpad handles its own setup
+        }
 
         // Auto-float dialogs and small windows
         if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
@@ -662,7 +782,7 @@ class WindowManager: WindowObserverDelegate {
         let targetWorkspace = config.appWorkspaceRules[appName]
             ?? (bundleID.flatMap { config.appWorkspaceRules[$0] })
         if let target = targetWorkspace {
-            let screen = NSScreen.main ?? NSScreen.screens.first!
+            let screen = NSScreen.safeMain
             let monitorID = WorkspaceManager.shared.screenID(for: screen)
             let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
             if target != currentWS {
@@ -700,7 +820,8 @@ class WindowManager: WindowObserverDelegate {
 
         if shouldFloat {
             floatingWindows.insert(windowID)
-        } else if let element = axElements[windowID] {
+            restoreWindowAlpha(windowID)
+        } else if axElements[windowID] != nil {
             layoutEngine.insert(windowID: windowID, afterFocused: focusedWindowID)
 
             // Apply per-app layout rules (e.g. "Arc = left" puts Arc at index 0)
@@ -718,33 +839,22 @@ class WindowManager: WindowObserverDelegate {
                 }
             }
 
-            // Pre-position the new window slightly offset from its target frame BEFORE
-            // retile() to prevent the flash where it briefly appears at the macOS default
-            // position. The offset creates a subtle slide-in animation when retile()
-            // moves it to the correct position via the Animator.
-            let region = getTilingRegion()
-            let layouts = layoutEngine.calculateFrames(in: region)
-            if let targetFrame = layouts.first(where: { $0.0 == windowID })?.1 {
-                let slideOffset: CGFloat = 20
-                let preFrame = CGRect(
-                    x: targetFrame.origin.x + slideOffset,
-                    y: targetFrame.origin.y,
-                    width: targetFrame.width - slideOffset,
-                    height: targetFrame.height
-                )
-                let conn = CGSMainConnectionID()
-                SLSDisableUpdate(conn)
-                AccessibilityBridge.setFrame(of: element, to: preFrame)
-                SLSReenableUpdate(conn)
-            }
-
             // macOS gives focus to newly created windows, so update our tracking
             // to match. This ensures dim overlays and borders reflect actual focus.
             focusedWindowID = windowID
 
-            retile()
+            // Immediately hide the new window so the user never sees it at the
+            // app's default position. The Animator will fade it in at the correct
+            // tiled position with the Hyprland popin effect.
+            let conn = CGSMainConnectionID()
+            CGSSetWindowAlpha(conn, windowID, 0.0)
+
+            // Hyprland-style scale-in: calculate 87% centered start frame for the new window.
+            // The GPU Animator will handle the scale-up + fade-in from center.
+            retileWithScaleIn(newWindowID: windowID)
         } else {
             trackedWindows.removeValue(forKey: windowID)
+            restoreWindowAlpha(windowID)
         }
     }
 
@@ -862,7 +972,7 @@ class WindowManager: WindowObserverDelegate {
         spaceyLog("Layout: \(names[layoutEngine.layoutVariant])")
 
         // Save layout variant for this workspace
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
         workspaceLayouts["\(monitorID)-\(currentWS)"] = layoutEngine.layoutVariant
@@ -1252,7 +1362,7 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let screenFrame = screenFrameInAX(for: screen)
 
         // Hide off-screen (same technique as workspace hiding)
@@ -1292,7 +1402,7 @@ class WindowManager: WindowObserverDelegate {
         minimizedWindows.remove(windowID)
 
         // Restore to visible position
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let screenFrame = screenFrameInAX(for: screen)
         let restoreFrame = CGRect(
             x: screenFrame.origin.x + screenFrame.width / 4,
@@ -1361,7 +1471,7 @@ class WindowManager: WindowObserverDelegate {
     private func showScratchpad(_ wid: CGWindowID) {
         guard let element = axElements[wid], let tracked = trackedWindows[wid] else { return }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let screenFrame = screenFrameInAX(for: screen)
 
         // Center the scratchpad at 80% width, 60% height
@@ -1383,7 +1493,7 @@ class WindowManager: WindowObserverDelegate {
     private func hideScratchpad(_ wid: CGWindowID) {
         guard let element = axElements[wid] else { return }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let screenFrame = screenFrameInAX(for: screen)
 
         WorkspaceManager.shared.hideWindow(wid, element: element, screenFrame: screenFrame)
@@ -1463,7 +1573,7 @@ class WindowManager: WindowObserverDelegate {
     private func switchVirtualWorkspace(_ number: Int) {
         guard number >= 1 && number <= 9 else { return }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
 
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
@@ -1530,7 +1640,7 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
 

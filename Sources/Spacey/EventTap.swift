@@ -9,6 +9,9 @@ class EventTap {
     private var runLoopSource: CFRunLoopSource?
     private var heartbeatTimer: Timer?
 
+    /// Whether the event tap was successfully created (Input Monitoring granted)
+    var isActive: Bool { eventTap != nil }
+
     var actionHandler: ((WMAction) -> Void)?
     var keyBindings: [KeyBinding] = []
 
