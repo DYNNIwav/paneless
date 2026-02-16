@@ -42,20 +42,7 @@ Grant both in **System Settings > Privacy & Security**:
 ### Homebrew
 
 ```bash
-brew tap DYNNIwav/paneless
-brew install --HEAD paneless
-```
-
-Then add the app to your Applications folder (printed in caveats after install):
-
-```bash
-ln -sf $(brew --prefix)/opt/paneless/Paneless.app ~/Applications/Paneless.app
-```
-
-To upgrade to the latest version:
-
-```bash
-brew upgrade --fetch-HEAD paneless
+brew install --cask DYNNIwav/paneless/paneless
 ```
 
 ### From Source
