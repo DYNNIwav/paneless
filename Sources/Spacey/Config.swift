@@ -14,7 +14,7 @@ struct SpaceyConfig {
     // Focus follows mouse
     var focusFollowsMouse: Bool = false
 
-    // Dim unfocused windows (0.0 = no dim, 0.3 = moderate dim)
+    // Dim unfocused windows (0.0 = no dim, 0.15 = subtle, 0.3 = moderate)
     var dimUnfocused: CGFloat = 0
 
     // Use native macOS compositor tiling (no gaps support)

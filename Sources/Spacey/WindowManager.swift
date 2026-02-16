@@ -20,8 +20,7 @@ class WindowManager: WindowObserverDelegate {
 
     private var mouseMonitor: Any?
     private var lastMouseFocusTime: Date = .distantPast
-    private var dimmedWindows: Set<CGWindowID> = []
-    private var dimOverlays: [CGWindowID: NSWindow] = [:]
+    private var dimmedWindows: Set<CGWindowID> = []  // windows currently at reduced brightness
     private var clickMonitor: Any?
     private var clickDimWorkItem: DispatchWorkItem?
     private var resizeMonitor: Any?
@@ -74,6 +73,9 @@ class WindowManager: WindowObserverDelegate {
 
         // Check for orphaned hidden windows from a previous crash and restore them
         restoreOrphanedWindows()
+
+        // Reset any stale alpha/brightness from previous crash or failed dimming attempts
+        restoreAllDimming()
 
         // Reset any stale CGS transforms from a previous crash mid-animation
         let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
@@ -885,9 +887,10 @@ class WindowManager: WindowObserverDelegate {
         floatingWindows.remove(windowID)
         fullscreenWindows.remove(windowID)
         stickyWindows.remove(windowID)
-        dimmedWindows.remove(windowID)
-        if let overlay = dimOverlays.removeValue(forKey: windowID) {
-            overlay.orderOut(nil)
+        if dimmedWindows.remove(windowID) != nil {
+            var wids: [CGWindowID] = [windowID]
+            var values: [Float] = [0.0]
+            CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
         }
 
         let wasTiled = layoutEngine.contains(windowID)
@@ -1187,9 +1190,11 @@ class WindowManager: WindowObserverDelegate {
         }
     }
 
-    // MARK: - Dim Unfocused Windows (Rounded Overlay + CGSOrderWindow)
+    // MARK: - Dim Unfocused Windows (Compositor Brightness)
 
-    private var dimReorderWorkItem: DispatchWorkItem?
+    /// Uses CGSSetWindowListBrightness as an additive brightness offset:
+    ///   0.0 = normal, negative = darker, positive = brighter.
+    /// Compositor-level — follows window shape, rounded corners, shadow perfectly.
 
     private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
         let dimAmount = config.dimUnfocused
@@ -1198,92 +1203,55 @@ class WindowManager: WindowObserverDelegate {
         let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
         let conn = CGSMainConnectionID()
         let tiledSet = Set(layoutEngine.tiledWindows)
-        let currentLayouts = layouts ?? layoutEngine.calculateFrames(in: getTilingRegion())
+        let offset = -Float(dimAmount)  // e.g. dim=0.3 → offset=-0.3 (darker)
 
-        // Remove overlays for windows no longer tiled or now focused
+        // Restore windows no longer tiled or now focused
+        var toRestore: [CGWindowID] = []
         for wid in Array(dimmedWindows) {
             if !tiledSet.contains(wid) || wid == focusedID {
-                if let overlay = dimOverlays.removeValue(forKey: wid) {
-                    overlay.orderOut(nil)
-                }
+                toRestore.append(wid)
                 dimmedWindows.remove(wid)
             }
         }
+        if !toRestore.isEmpty {
+            var wids = toRestore
+            var values = [Float](repeating: 0.0, count: toRestore.count)
+            CGSSetWindowListBrightness(conn, &wids, &values, Int32(toRestore.count))
+        }
 
-        // Create/update overlays for unfocused tiled windows
-        for (wid, frame) in currentLayouts {
+        // Dim unfocused tiled windows
+        var toDim: [CGWindowID] = []
+        for wid in layoutEngine.tiledWindows {
             if wid == focusedID {
-                if let overlay = dimOverlays.removeValue(forKey: wid) {
-                    overlay.orderOut(nil)
+                if dimmedWindows.contains(wid) {
+                    var wids: [CGWindowID] = [wid]
+                    var values: [Float] = [0.0]
+                    CGSSetWindowListBrightness(conn, &wids, &values, 1)
+                    dimmedWindows.remove(wid)
                 }
-                dimmedWindows.remove(wid)
                 continue
             }
-
-            let cocoaFrame = axToCocoaFrame(frame)
-            if let overlay = dimOverlays[wid] {
-                overlay.setFrame(cocoaFrame, display: true)
-            } else {
-                let overlay = makeDimOverlay(frame: cocoaFrame, alpha: dimAmount)
-                dimOverlays[wid] = overlay
-            }
-
-            // Z-order: place overlay directly above target window
-            if let overlay = dimOverlays[wid] {
-                let overlayWid = CGWindowID(overlay.windowNumber)
-                CGSOrderWindow(conn, overlayWid, 1, wid)
-            }
+            toDim.append(wid)
             dimmedWindows.insert(wid)
         }
 
-        // Schedule a delayed re-order pass. When macOS activates a window via mouse click,
-        // it shuffles z-order asynchronously and can undo our CGSOrderWindow calls.
-        // Re-applying after a short delay catches this.
-        dimReorderWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            let c = CGSMainConnectionID()
-            for (wid, overlay) in self.dimOverlays {
-                let oid = CGWindowID(overlay.windowNumber)
-                CGSOrderWindow(c, oid, 1, wid)
-            }
+        if !toDim.isEmpty {
+            var wids = toDim
+            var values = [Float](repeating: offset, count: toDim.count)
+            CGSSetWindowListBrightness(conn, &wids, &values, Int32(toDim.count))
         }
-        dimReorderWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: workItem)
     }
 
     private func restoreAllDimming() {
-        for (_, overlay) in dimOverlays {
-            overlay.orderOut(nil)
+        let conn = CGSMainConnectionID()
+        // Reset brightness offset to 0.0 (normal) for all visible windows
+        let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
+        if !allWindowIDs.isEmpty {
+            var wids = allWindowIDs
+            var values = [Float](repeating: 0.0, count: allWindowIDs.count)
+            CGSSetWindowListBrightness(conn, &wids, &values, Int32(allWindowIDs.count))
         }
-        dimOverlays.removeAll()
         dimmedWindows.removeAll()
-    }
-
-    private func makeDimOverlay(frame: NSRect, alpha: CGFloat) -> NSWindow {
-        let window = NSWindow(
-            contentRect: frame,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.level = .normal
-        window.ignoresMouseEvents = true
-        window.hasShadow = false
-        window.collectionBehavior = [.stationary]
-
-        // Rounded corners matching macOS window radius
-        let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
-        view.layer?.cornerRadius = 10
-        view.layer?.masksToBounds = true
-        window.contentView = view
-
-        window.orderFrontRegardless()
-        return window
     }
 
     private func axToCocoaFrame(_ axFrame: CGRect) -> NSRect {
@@ -1381,11 +1349,11 @@ class WindowManager: WindowObserverDelegate {
         let wasTiled = layoutEngine.contains(windowID)
         if wasTiled { layoutEngine.remove(windowID: windowID) }
 
-        // Remove dim overlay
-        if let overlay = dimOverlays.removeValue(forKey: windowID) {
-            overlay.orderOut(nil)
+        if dimmedWindows.remove(windowID) != nil {
+            var wids: [CGWindowID] = [windowID]
+            var values: [Float] = [0.0]
+            CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
         }
-        dimmedWindows.remove(windowID)
 
         retile()
 
@@ -1507,11 +1475,11 @@ class WindowManager: WindowObserverDelegate {
         WorkspaceManager.shared.hideWindow(wid, element: element, screenFrame: screenFrame)
         scratchpadVisible = false
 
-        // Remove dim overlay if any
-        if let overlay = dimOverlays.removeValue(forKey: wid) {
-            overlay.orderOut(nil)
+        if dimmedWindows.remove(wid) != nil {
+            var wids: [CGWindowID] = [wid]
+            var values: [Float] = [0.0]
+            CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
         }
-        dimmedWindows.remove(wid)
 
         // Focus the first tiled window
         if let firstWid = layoutEngine.tiledWindows.first,
@@ -1715,9 +1683,10 @@ class WindowManager: WindowObserverDelegate {
         let element = axElements.removeValue(forKey: windowID)
         let wasFloating = floatingWindows.remove(windowID) != nil
         let wasFullscreen = fullscreenWindows.remove(windowID) != nil
-        dimmedWindows.remove(windowID)
-        if let overlay = dimOverlays.removeValue(forKey: windowID) {
-            overlay.orderOut(nil)
+        if dimmedWindows.remove(windowID) != nil {
+            var wids: [CGWindowID] = [windowID]
+            var values: [Float] = [0.0]
+            CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
         }
 
         // Hide the window (move off-screen)

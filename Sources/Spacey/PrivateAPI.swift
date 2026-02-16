@@ -68,3 +68,10 @@ func CGSMoveWindow(_ cid: CGSConnectionID, _ wid: CGWindowID, _ point: inout CGP
 // Private AXUIElement API to get CGWindowID from an AXUIElement
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: inout CGWindowID) -> AXError
+
+// Per-window brightness — compositor-level dimming (no overlays, follows window shape perfectly)
+// brightness: 0.0 = black, 1.0 = normal. Applies to the window's compositor surface.
+@discardableResult
+@_silgen_name("CGSSetWindowListBrightness")
+func CGSSetWindowListBrightness(_ cid: CGSConnectionID, _ wids: UnsafeMutablePointer<CGWindowID>,
+                                 _ brightness: UnsafeMutablePointer<Float>, _ count: Int32) -> CGError

@@ -344,9 +344,22 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             try? fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent,
                                     withIntermediateDirectories: true)
             let defaultConfig = """
+            # Spacey Configuration
+            # Reload with Alt+Shift+R (or your reload_config binding)
+
             [layout]
             inner_gap = 8
             outer_gap = 8
+            animations = true
+            # native_animation = false
+            # single_window_padding = 0
+            # focus_follows_mouse = false
+            # force_promotion = false
+            # auto_float_dialogs = true
+
+            # Dim unfocused windows using compositor brightness
+            # 0.0 = off, 0.15 = subtle, 0.3 = moderate, 0.5 = strong
+            dim_unfocused = 0.03
 
             [border]
             enabled = false
@@ -357,19 +370,48 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
             [rules]
             float = Finder, System Settings, Calculator, Archive Utility, System Preferences
+            # exclude = SomeApp
+            # sticky = Spotify
 
-            # [workspaces]
+            # [app_rules]
+            # Arc = left
+            # Ghostty = right
+            # Slack = workspace 3
+
+            [workspaces]
             # 1 = Main
             # 2 = Browser
             # 3 = Chat
 
             # [bindings]
-            # alt+shift, h = focus_left
-            # alt+shift, l = focus_right
+            # Uncomment to override default keybindings.
+            # Format: modifier, key = action
+            #
+            # alt+shift, h = focus_prev
+            # alt+shift, l = focus_next
+            # alt+shift, j = rotate_next
+            # alt+shift, k = rotate_prev
             # alt+shift, return = swap_master
-            # alt+shift, space = toggle_float
+            # alt+shift, space = cycle_layout
+            # alt+shift, t = toggle_float
             # alt+shift, f = toggle_fullscreen
             # alt+shift, q = close
+            # alt+shift, r = reload_config
+            # alt+shift, equal = increase_gap
+            # alt+shift, minus = decrease_gap
+            # alt+shift, rightbracket = grow_focused
+            # alt+shift, leftbracket = shrink_focused
+            # alt+shift, m = minimize
+            # alt+shift, g = toggle_scratchpad
+            # alt+shift, comma = focus_monitor left
+            # alt+shift, period = focus_monitor right
+            # cmd+shift, h = position_left
+            # cmd+shift, l = position_right
+            # cmd+shift, k = position_up
+            # cmd+shift, j = position_down
+            # cmd+shift, f = position_fill
+            #
+            # Window marks (vim-style):
             # alt+shift, m = set_mark a
             # alt+shift, quote = jump_mark a
             """
