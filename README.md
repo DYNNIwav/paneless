@@ -39,6 +39,28 @@ Grant both in **System Settings > Privacy & Security**:
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew tap DYNNIwav/paneless
+brew install --HEAD paneless
+```
+
+Then symlink the app bundle and start it:
+
+```bash
+ln -sf $(brew --prefix)/opt/paneless/Paneless.app ~/Applications/Paneless.app
+open ~/Applications/Paneless.app
+```
+
+To upgrade to the latest version:
+
+```bash
+brew upgrade --fetch-HEAD paneless
+```
+
+### From Source
+
 ```bash
 git clone https://github.com/DYNNIwav/paneless.git
 cd paneless
@@ -48,11 +70,9 @@ cd paneless
 
 This installs `Paneless.app` to `~/Applications/` and the `paneless` CLI to `/usr/local/bin/`.
 
-To start:
+### Post-Install
 
-```bash
-open ~/Applications/Paneless.app
-```
+To start: `open ~/Applications/Paneless.app`
 
 To start at login: **System Settings > General > Login Items > add Paneless**.
 
