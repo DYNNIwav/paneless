@@ -9,14 +9,14 @@ if CommandLine.arguments.count >= 2 {
     case "--focus-workspace":
         if CommandLine.arguments.count >= 3, let n = Int(CommandLine.arguments[2]), n >= 1, n <= 9 {
             // CLI workspace switch: start the app briefly to perform the switch
-            let delegate = SpaceyAppDelegate()
+            let delegate = PanelessAppDelegate()
             let app = NSApplication.shared
             app.delegate = delegate
             app.setActivationPolicy(.accessory)
             WindowManager.shared.handleAction(.switchWorkspace(n))
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         } else {
-            fputs("Usage: spacey --focus-workspace N  (N = 1-9)\n", stderr)
+            fputs("Usage: paneless --focus-workspace N  (N = 1-9)\n", stderr)
             exit(1)
         }
         exit(0)
@@ -25,14 +25,14 @@ if CommandLine.arguments.count >= 2 {
         // Backward compatibility — deprecated
         fputs("WARNING: --focus-space is deprecated, use --focus-workspace instead\n", stderr)
         if CommandLine.arguments.count >= 3, let n = Int(CommandLine.arguments[2]), n >= 1, n <= 9 {
-            let delegate = SpaceyAppDelegate()
+            let delegate = PanelessAppDelegate()
             let app = NSApplication.shared
             app.delegate = delegate
             app.setActivationPolicy(.accessory)
             WindowManager.shared.handleAction(.switchWorkspace(n))
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         } else {
-            fputs("Usage: spacey --focus-workspace N  (N = 1-9)\n", stderr)
+            fputs("Usage: paneless --focus-workspace N  (N = 1-9)\n", stderr)
             exit(1)
         }
         exit(0)
@@ -56,13 +56,13 @@ if CommandLine.arguments.count >= 2 {
 
     case "--help", "-h":
         print("""
-        Spacey - Tiling Window Manager for macOS
+        Paneless - Tiling Window Manager for macOS
 
         Usage:
-          spacey                             Start as daemon (menu bar app)
-          spacey --focus-workspace N         Switch to workspace N (1-9)
-          spacey --list-workspaces           List workspaces with windows
-          spacey --help                      Show this help
+          paneless                             Start as daemon (menu bar app)
+          paneless --focus-workspace N         Switch to workspace N (1-9)
+          paneless --list-workspaces           List workspaces with windows
+          paneless --help                      Show this help
 
         Default Hotkeys:
           Alt+1-9              Switch to workspace N
@@ -76,7 +76,7 @@ if CommandLine.arguments.count >= 2 {
           Alt+Shift+Q          Close window
           Alt+Shift+,/.        Focus monitor left/right
 
-        Config: ~/.config/spacey/config
+        Config: ~/.config/paneless/config
 
         Requires:
           - Accessibility: System Settings > Privacy & Security > Accessibility
@@ -92,7 +92,7 @@ if CommandLine.arguments.count >= 2 {
 
 // MARK: - Daemon Mode
 
-let delegate = SpaceyAppDelegate()
+let delegate = PanelessAppDelegate()
 let app = NSApplication.shared
 app.delegate = delegate
 app.setActivationPolicy(.accessory)  // No dock icon

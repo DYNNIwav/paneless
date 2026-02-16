@@ -3,7 +3,7 @@ import Cocoa
 class WindowManager: WindowObserverDelegate {
     static let shared = WindowManager()
 
-    var config: SpaceyConfig
+    var config: PanelessConfig
     let layoutEngine: LayoutEngine
     let observer: WindowObserver
     let eventTap: EventTap
@@ -31,10 +31,6 @@ class WindowManager: WindowObserverDelegate {
     // Minimized windows (hidden but tracked in workspace)
     private var minimizedWindows: Set<CGWindowID> = []
 
-    // Scratchpad state
-    private var scratchpadWindowID: CGWindowID?
-    private var scratchpadVisible = false
-
     // Window marks (vim-style: key -> windowID)
     private var windowMarks: [String: CGWindowID] = [:]
 
@@ -50,7 +46,7 @@ class WindowManager: WindowObserverDelegate {
     private var dragStartWindowID: CGWindowID?
 
     private init() {
-        self.config = SpaceyConfig.load()
+        self.config = PanelessConfig.load()
         self.layoutEngine = LayoutEngine(config: config)
         self.observer = WindowObserver()
         self.eventTap = EventTap()
@@ -86,7 +82,7 @@ class WindowManager: WindowObserverDelegate {
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         WorkspaceManager.shared.activeWorkspace[monitorID] = 1
         saveWorkspaceState(workspace: 1, monitor: monitorID)
-        spaceyLog("Initialized workspace 1 on \(monitorID) with \(layoutEngine.tiledWindows.count) tiled windows")
+        panelessLog("Initialized workspace 1 on \(monitorID) with \(layoutEngine.tiledWindows.count) tiled windows")
 
         // Restore windows to their saved workspaces from a previous session
         WorkspacePersistence.restoreWorkspaceAssignments()
@@ -118,7 +114,7 @@ class WindowManager: WindowObserverDelegate {
             startDisplayLink()
         }
 
-        spaceyLog("Spacey started (monitors: \(NSScreen.screens.count), bindings: \(config.keyBindings.count))")
+        panelessLog("Paneless started (monitors: \(NSScreen.screens.count), bindings: \(config.keyBindings.count))")
     }
 
     func stop() {
@@ -138,7 +134,7 @@ class WindowManager: WindowObserverDelegate {
         NotificationCenter.default.removeObserver(self)
         observer.stop()
         eventTap.stop()
-        spaceyLog("Spacey stopped")
+        panelessLog("Paneless stopped")
     }
 
     // MARK: - Action Dispatch
@@ -175,7 +171,6 @@ class WindowManager: WindowObserverDelegate {
         case .switchWorkspace(let n):       switchVirtualWorkspace(n)
         case .moveToWorkspace(let n):       moveToVirtualWorkspace(n)
         case .minimizeToWorkspace:          minimizeFocused()
-        case .toggleScratchpad:             toggleScratchpad()
         case .setMark(let key):             setWindowMark(key)
         case .jumpToMark(let key):          jumpToWindowMark(key)
         }
@@ -335,7 +330,7 @@ class WindowManager: WindowObserverDelegate {
         } else {
             fullscreenWindows.insert(windowID)
             layoutEngine.remove(windowID: windowID)
-            // Use the full visible screen (menu bar + dock respected, no Spacey gaps)
+            // Use the full visible screen (menu bar + dock respected, no Paneless gaps)
             let screen = NSScreen.safeMain
             let visibleFrame = screen.visibleFrame
             let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
@@ -468,7 +463,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Config Reload
 
     private func reloadConfig() {
-        config = SpaceyConfig.load()
+        config = PanelessConfig.load()
         layoutEngine.config = config
         BorderManager.shared.config = config.border
         eventTap.keyBindings = config.keyBindings
@@ -495,7 +490,7 @@ class WindowManager: WindowObserverDelegate {
         }
 
         scanCurrentSpace()
-        spaceyLog("Config reloaded")
+        panelessLog("Config reloaded")
     }
 
     // MARK: - Tiling
@@ -527,7 +522,7 @@ class WindowManager: WindowObserverDelegate {
                     }
                 }
             } else {
-                spaceyLog("retile: menu tiling failed, falling back to AX frames")
+                panelessLog("retile: menu tiling failed, falling back to AX frames")
                 NativeTiling.applyLayout(
                     windows: windows, region: region, gap: config.innerGap,
                     singleWindowPadding: config.singleWindowPadding,
@@ -740,18 +735,11 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
-        // Check if this is the scratchpad window we just launched
-        checkScratchpadPending(windowID: windowID, appName: appName, bundleID: bundleID)
-        if scratchpadWindowID == windowID {
-            restoreWindowAlpha(windowID)
-            return  // Scratchpad handles its own setup
-        }
-
         // Auto-float dialogs and small windows
         if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
             if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
                 shouldFloat = true
-                spaceyLog("Auto-floating dialog/small window: \(appName) (\(windowID))")
+                panelessLog("Auto-floating dialog/small window: \(appName) (\(windowID))")
             }
         }
 
@@ -775,7 +763,7 @@ class WindowManager: WindowObserverDelegate {
 
                 if isUntitled || isSmallerThanRegion {
                     shouldFloat = true
-                    spaceyLog("Auto-floating secondary window from \(appName) (\(windowID))")
+                    panelessLog("Auto-floating secondary window from \(appName) (\(windowID))")
                 }
             }
         }
@@ -820,7 +808,7 @@ class WindowManager: WindowObserverDelegate {
                 known.insert(windowID)
                 observer.syncKnownWindows(known)
 
-                spaceyLog("Auto-moved \(appName) (\(windowID)) to workspace \(target)")
+                panelessLog("Auto-moved \(appName) (\(windowID)) to workspace \(target)")
                 return
             }
         }
@@ -867,12 +855,6 @@ class WindowManager: WindowObserverDelegate {
 
     func windowDestroyed(windowID: CGWindowID) {
         guard trackedWindows[windowID] != nil else { return }
-
-        // Clean up scratchpad if its window was closed
-        if windowID == scratchpadWindowID {
-            scratchpadWindowID = nil
-            scratchpadVisible = false
-        }
 
         // Clean up minimized state
         minimizedWindows.remove(windowID)
@@ -934,7 +916,7 @@ class WindowManager: WindowObserverDelegate {
     func spaceChanged() {
         // With virtual workspaces, native space changes are a no-op.
         // All workspace switching is handled by switchVirtualWorkspace().
-        spaceyLog("Native space change detected (ignored — using virtual workspaces)")
+        panelessLog("Native space change detected (ignored — using virtual workspaces)")
     }
 
     func focusChanged() {
@@ -980,7 +962,7 @@ class WindowManager: WindowObserverDelegate {
     private func cycleLayout() {
         layoutEngine.cycleVariant()
         let names = ["side-by-side", "stacked", "monocle"]
-        spaceyLog("Layout: \(names[layoutEngine.layoutVariant])")
+        panelessLog("Layout: \(names[layoutEngine.layoutVariant])")
 
         // Save layout variant for this workspace
         let screen = NSScreen.safeMain
@@ -996,7 +978,7 @@ class WindowManager: WindowObserverDelegate {
     private func adjustGap(by delta: CGFloat) {
         config.innerGap = max(0, config.innerGap + delta)
         config.outerGap = max(0, config.outerGap + delta)
-        spaceyLog("Gaps: inner=\(config.innerGap) outer=\(config.outerGap)")
+        panelessLog("Gaps: inner=\(config.innerGap) outer=\(config.outerGap)")
         retile()
     }
 
@@ -1004,7 +986,7 @@ class WindowManager: WindowObserverDelegate {
 
     private func adjustSplitRatio(by delta: CGFloat) {
         layoutEngine.splitRatio = max(0.2, min(0.8, layoutEngine.splitRatio + delta))
-        spaceyLog("Split ratio: \(layoutEngine.splitRatio)")
+        panelessLog("Split ratio: \(layoutEngine.splitRatio)")
         retile()
     }
 
@@ -1018,7 +1000,7 @@ class WindowManager: WindowObserverDelegate {
         }) {
             finder.activate()
             focusedWindowID = nil
-            spaceyLog("Empty workspace — focused Finder/desktop")
+            panelessLog("Empty workspace — focused Finder/desktop")
         }
     }
 
@@ -1142,7 +1124,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Display Change
 
     @objc private func displayConfigChanged(_ notification: Notification) {
-        spaceyLog("Display configuration changed, retiling")
+        panelessLog("Display configuration changed, retiling")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.retile()
         }
@@ -1366,7 +1348,7 @@ class WindowManager: WindowObserverDelegate {
             focusDesktop()
         }
 
-        spaceyLog("Minimized window \(windowID)")
+        panelessLog("Minimized window \(windowID)")
         onFocusChange?()
     }
 
@@ -1396,99 +1378,7 @@ class WindowManager: WindowObserverDelegate {
         AccessibilityBridge.focus(window: element, pid: tracked.pid)
         focusedWindowID = windowID
         retile()
-        spaceyLog("Restored minimized window \(windowID)")
-        onFocusChange?()
-    }
-
-    // MARK: - Scratchpad (Dedicated Ghostty Dropdown)
-
-    /// The scratchpad launches a NEW Ghostty window (via `open -na Ghostty`)
-    /// that is always floating and never interferes with existing Ghostty windows.
-    private var scratchpadPendingLaunch = false
-
-    private func toggleScratchpad() {
-        if let wid = scratchpadWindowID, scratchpadVisible {
-            hideScratchpad(wid)
-        } else if let wid = scratchpadWindowID, !scratchpadVisible,
-                  axElements[wid] != nil {
-            showScratchpad(wid)
-        } else {
-            // Launch a brand new Ghostty instance for the scratchpad
-            scratchpadPendingLaunch = true
-            scratchpadWindowID = nil
-            // open -na opens a new instance even if Ghostty is already running
-            let task = Process()
-            task.launchPath = "/usr/bin/open"
-            task.arguments = ["-na", "Ghostty"]
-            task.launch()
-            spaceyLog("Scratchpad: launching new Ghostty instance")
-        }
-    }
-
-    /// Called from windowCreated — checks if this is the scratchpad window we're waiting for
-    func checkScratchpadPending(windowID: CGWindowID, appName: String, bundleID: String?) {
-        guard scratchpadPendingLaunch,
-              appName == "Ghostty" || bundleID == "com.mitchellh.ghostty"
-        else { return }
-
-        scratchpadPendingLaunch = false
-        scratchpadWindowID = windowID
-
-        // Make it floating so it doesn't interfere with tiling
-        floatingWindows.insert(windowID)
-        if layoutEngine.contains(windowID) {
-            layoutEngine.remove(windowID: windowID)
-            retile()
-        }
-
-        showScratchpad(windowID)
-    }
-
-    private func showScratchpad(_ wid: CGWindowID) {
-        guard let element = axElements[wid], let tracked = trackedWindows[wid] else { return }
-
-        let screen = NSScreen.safeMain
-        let screenFrame = screenFrameInAX(for: screen)
-
-        // Center the scratchpad at 80% width, 60% height
-        let w = screenFrame.width * 0.8
-        let h = screenFrame.height * 0.6
-        let x = screenFrame.origin.x + (screenFrame.width - w) / 2
-        let y = screenFrame.origin.y + screenFrame.height * 0.05
-        let frame = CGRect(x: x, y: y, width: w, height: h)
-
-        AccessibilityBridge.setFrame(of: element, to: frame)
-        AccessibilityBridge.focus(window: element, pid: tracked.pid)
-        focusedWindowID = wid
-        scratchpadVisible = true
-
-        spaceyLog("Scratchpad shown")
-        onFocusChange?()
-    }
-
-    private func hideScratchpad(_ wid: CGWindowID) {
-        guard let element = axElements[wid] else { return }
-
-        let screen = NSScreen.safeMain
-        let screenFrame = screenFrameInAX(for: screen)
-
-        WorkspaceManager.shared.hideWindow(wid, element: element, screenFrame: screenFrame)
-        scratchpadVisible = false
-
-        if dimmedWindows.remove(wid) != nil {
-            var wids: [CGWindowID] = [wid]
-            var values: [Float] = [0.0]
-            CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
-        }
-
-        // Focus the first tiled window
-        if let firstWid = layoutEngine.tiledWindows.first,
-           let el = axElements[firstWid], let tracked = trackedWindows[firstWid] {
-            AccessibilityBridge.focus(window: el, pid: tracked.pid)
-            focusedWindowID = firstWid
-        }
-
-        spaceyLog("Scratchpad hidden")
+        panelessLog("Restored minimized window \(windowID)")
         onFocusChange?()
     }
 
@@ -1536,7 +1426,7 @@ class WindowManager: WindowObserverDelegate {
                        let idx2 = layoutEngine.tiledWindows.firstIndex(of: wid) {
                         layoutEngine.tiledWindows.swapAt(idx1, idx2)
                         retile()
-                        spaceyLog("Drag-reorder: swapped \(startID) with \(wid)")
+                        panelessLog("Drag-reorder: swapped \(startID) with \(wid)")
                     }
                     break
                 }
@@ -1550,12 +1440,12 @@ class WindowManager: WindowObserverDelegate {
         guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
         windowMarks[key] = windowID
         let appName = trackedWindows[windowID]?.appName ?? "unknown"
-        spaceyLog("Mark '\(key)' set on window \(windowID) (\(appName))")
+        panelessLog("Mark '\(key)' set on window \(windowID) (\(appName))")
     }
 
     private func jumpToWindowMark(_ key: String) {
         guard let windowID = windowMarks[key] else {
-            spaceyLog("No mark '\(key)' set")
+            panelessLog("No mark '\(key)' set")
             return
         }
 
@@ -1591,7 +1481,7 @@ class WindowManager: WindowObserverDelegate {
 
         // Mark is stale (window no longer exists)
         windowMarks.removeValue(forKey: key)
-        spaceyLog("Mark '\(key)' was stale — window no longer exists")
+        panelessLog("Mark '\(key)' was stale — window no longer exists")
     }
 
     // MARK: - Virtual Workspace Switching
@@ -1604,7 +1494,7 @@ class WindowManager: WindowObserverDelegate {
 
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
         guard number != currentWS else {
-            spaceyLog("Already on workspace \(number)")
+            panelessLog("Already on workspace \(number)")
             return
         }
 
@@ -1653,7 +1543,7 @@ class WindowManager: WindowObserverDelegate {
         }
 
         onSpaceChange?()
-        spaceyLog("Switched to workspace \(number) on \(monitorID)")
+        panelessLog("Switched to workspace \(number) on \(monitorID)")
     }
 
     private func moveToVirtualWorkspace(_ number: Int) {
@@ -1662,7 +1552,7 @@ class WindowManager: WindowObserverDelegate {
 
         // Sticky windows cannot be moved to a specific workspace (they're on all)
         guard !stickyWindows.contains(windowID) else {
-            spaceyLog("Cannot move sticky window to workspace — it's visible on all workspaces")
+            panelessLog("Cannot move sticky window to workspace — it's visible on all workspaces")
             return
         }
 
@@ -1671,7 +1561,7 @@ class WindowManager: WindowObserverDelegate {
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
 
         guard number != currentWS else {
-            spaceyLog("Window already on workspace \(number)")
+            panelessLog("Window already on workspace \(number)")
             return
         }
 
@@ -1720,7 +1610,7 @@ class WindowManager: WindowObserverDelegate {
 
         retile()
         onSpaceChange?()
-        spaceyLog("Moved window \(windowID) to workspace \(number)")
+        panelessLog("Moved window \(windowID) to workspace \(number)")
     }
 
     private func saveWorkspaceState(workspace: Int, monitor: String) {
@@ -1867,7 +1757,7 @@ class WindowManager: WindowObserverDelegate {
         timer.resume()
         proMotionTimer = timer
 
-        spaceyLog("ProMotion force enabled (120Hz keepalive)")
+        panelessLog("ProMotion force enabled (120Hz keepalive)")
     }
 
     private func stopDisplayLink() {
@@ -1875,7 +1765,7 @@ class WindowManager: WindowObserverDelegate {
         proMotionTimer = nil
         proMotionWindow?.orderOut(nil)
         proMotionWindow = nil
-        spaceyLog("ProMotion force disabled")
+        panelessLog("ProMotion force disabled")
     }
 
     // MARK: - Crash Recovery
@@ -1894,7 +1784,7 @@ class WindowManager: WindowObserverDelegate {
                         let centerY = screenFrame.origin.y + screenFrame.height / 4
                         let restoredFrame = CGRect(x: centerX, y: centerY, width: info.frame.width, height: info.frame.height)
                         AccessibilityBridge.setFrame(of: element, to: restoredFrame)
-                        spaceyLog("Restored orphaned window \(wid) (\(info.appName)) from hidden position")
+                        panelessLog("Restored orphaned window \(wid) (\(info.appName)) from hidden position")
                     }
                 }
             }

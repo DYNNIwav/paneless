@@ -43,7 +43,7 @@ class WindowObserver {
     // them (alpha=0) before AX notifications even fire. This prevents the
     // flash of the window at its default position for slow apps.
 
-    private let interceptorQueue = DispatchQueue(label: "com.spacey.interceptor", qos: .userInteractive)
+    private let interceptorQueue = DispatchQueue(label: "com.paneless.interceptor", qos: .userInteractive)
     private var interceptorTimer: DispatchSourceTimer?
     /// Thread-safe snapshot of known window IDs for the interceptor
     private var interceptorKnown = Set<CGWindowID>()
@@ -69,7 +69,7 @@ class WindowObserver {
         schedulePoll()
 
         pollWindows()
-        spaceyLog("Window observer started (adaptive polling)")
+        panelessLog("Window observer started (adaptive polling)")
     }
 
     func stop() {

@@ -28,7 +28,7 @@ class EventTap {
             callback: eventTapCallback,
             userInfo: nil
         ) else {
-            spaceyLog("Failed to create event tap. Grant Input Monitoring in System Settings > Privacy & Security.")
+            panelessLog("Failed to create event tap. Grant Input Monitoring in System Settings > Privacy & Security.")
             return
         }
 
@@ -42,7 +42,7 @@ class EventTap {
             self?.checkTapHealth()
         }
 
-        spaceyLog("Event tap started")
+        panelessLog("Event tap started")
     }
 
     func stop() {
@@ -63,7 +63,7 @@ class EventTap {
     func reEnable() {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: true)
-            spaceyLog("Event tap re-enabled")
+            panelessLog("Event tap re-enabled")
         }
     }
 
@@ -96,14 +96,14 @@ class EventTap {
     private func checkTapHealth() {
         guard let tap = eventTap else {
             // Tap was lost entirely, try to recreate
-            spaceyLog("Event tap lost, attempting to recreate")
+            panelessLog("Event tap lost, attempting to recreate")
             stop()
             start()
             return
         }
 
         if !CGEvent.tapIsEnabled(tap: tap) {
-            spaceyLog("Event tap was disabled, re-enabling")
+            panelessLog("Event tap was disabled, re-enabling")
             CGEvent.tapEnable(tap: tap, enable: true)
         }
     }

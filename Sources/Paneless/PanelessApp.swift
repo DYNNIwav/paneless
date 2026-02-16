@@ -31,7 +31,7 @@ private struct MenuBarTheme {
     }
 }
 
-class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
+class PanelessAppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var configWatcherSource: DispatchSourceFileSystemObject?
     private var permissionCheckTimer: Timer?
@@ -45,6 +45,9 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
     private lazy var monoBold = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
     private lazy var titleFont = NSFont.systemFont(ofSize: 11, weight: .regular)
 
+    // App icon cache for menu bar (bundleID -> resized icon)
+    private var appIconCache: [String: NSImage] = [:]
+
     // Debounce: coalesce rapid status bar updates into one per runloop cycle
     private var needsStatusBarUpdate = false
 
@@ -54,7 +57,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         accessibilityGranted = trusted
 
         if !trusted {
-            spaceyLog("Accessibility permission not yet granted. Prompting user.")
+            panelessLog("Accessibility permission not yet granted. Prompting user.")
         }
 
         setupMenuBar()
@@ -67,7 +70,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             startWindowManager()
         }
 
-        spaceyLog("Ready")
+        panelessLog("Ready")
     }
 
     private func startWindowManager() {
@@ -84,7 +87,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         // detect the failure and guide the user to System Settings.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             if !WindowManager.shared.eventTap.isActive {
-                spaceyLog("Input Monitoring permission not granted. Keybindings will not work.")
+                panelessLog("Input Monitoring permission not granted. Keybindings will not work.")
                 self?.showInputMonitoringWarning()
             }
         }
@@ -99,7 +102,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
                 self.accessibilityGranted = true
                 self.permissionCheckTimer?.invalidate()
                 self.permissionCheckTimer = nil
-                spaceyLog("Accessibility permission granted")
+                panelessLog("Accessibility permission granted")
                 self.startWindowManager()
             }
         }
@@ -129,11 +132,11 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Config File Watcher
 
     private func startConfigWatcher() {
-        let configPath = NSString("~/.config/spacey/config").expandingTildeInPath
+        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
 
         let fd = open(configPath, O_EVTONLY)
         guard fd >= 0 else {
-            spaceyLog("Config watcher: couldn't open \(configPath)")
+            panelessLog("Config watcher: couldn't open \(configPath)")
             return
         }
 
@@ -144,7 +147,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         )
 
         source.setEventHandler { [weak self] in
-            spaceyLog("Config file changed on disk, reloading")
+            panelessLog("Config file changed on disk, reloading")
             self?.performConfigReload()
 
             let flags = source.data
@@ -163,7 +166,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
         configWatcherSource = source
         source.resume()
-        spaceyLog("Config watcher active")
+        panelessLog("Config watcher active")
     }
 
     // MARK: - Menu Bar
@@ -209,7 +212,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit Spacey", action: #selector(quit(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Paneless", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -226,6 +229,64 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             self.needsStatusBarUpdate = false
             self.updateStatusBar()
         }
+    }
+
+    /// Get a cached 16x16 app icon for the menu bar.
+    private func cachedAppIcon(bundleID: String?, pid: pid_t) -> NSImage? {
+        let cacheKey = bundleID ?? "pid-\(pid)"
+        if let cached = appIconCache[cacheKey] { return cached }
+
+        var icon: NSImage?
+
+        // Try bundle ID lookup first (works even if app isn't frontmost)
+        if let bid = bundleID,
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+            icon = NSWorkspace.shared.icon(forFile: url.path)
+        }
+
+        // Fallback: running application icon
+        if icon == nil, let app = NSRunningApplication(processIdentifier: pid) {
+            icon = app.icon
+        }
+
+        guard let img = icon else { return nil }
+
+        // Resize to 16x16 for menu bar
+        let size = NSSize(width: 16, height: 16)
+        let resized = NSImage(size: size)
+        resized.lockFocus()
+        img.draw(in: NSRect(origin: .zero, size: size),
+                 from: NSRect(origin: .zero, size: img.size),
+                 operation: .copy, fraction: 1.0)
+        resized.unlockFocus()
+        resized.isTemplate = false
+
+        appIconCache[cacheKey] = resized
+        return resized
+    }
+
+    /// Create an inline NSTextAttachment for an app icon.
+    private func iconAttachment(_ image: NSImage) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        // y offset aligns icon with text baseline
+        attachment.bounds = CGRect(x: 0, y: -2, width: 16, height: 16)
+        return NSAttributedString(attachment: attachment)
+    }
+
+    /// Collect unique app icons for a workspace (de-duped by bundleID/appName, ordered).
+    private func workspaceAppIcons(trackedWindows: [CGWindowID: TrackedWindow]) -> [NSImage] {
+        var seen = Set<String>()
+        var icons: [NSImage] = []
+        for (_, tracked) in trackedWindows {
+            let key = tracked.bundleID ?? tracked.appName
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            if let icon = cachedAppIcon(bundleID: tracked.bundleID, pid: tracked.pid) {
+                icons.append(icon)
+            }
+        }
+        return icons
     }
 
     func updateStatusBar() {
@@ -248,7 +309,6 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
         let variant = wm.layoutEngine.layoutVariant
         let layoutStr: String
         if variant == 2 && wm.layoutEngine.tiledWindows.count > 1 {
-            // Monocle mode: show position indicator
             let total = wm.layoutEngine.tiledWindows.count
             let currentIdx = wm.focusedWindowID.flatMap { wm.layoutEngine.tiledWindows.firstIndex(of: $0) }.map { $0 + 1 } ?? 1
             layoutStr = "[M \(currentIdx)/\(total)]"
@@ -257,41 +317,36 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             layoutStr = layoutIcons[min(variant, layoutIcons.count - 1)]
         }
 
-        // Active window title
-        var windowTitle = ""
+        // Focused app name (short — just the app, not the full window title)
+        var appName = ""
         if let focusedID = wm.focusedWindowID,
            let tracked = wm.trackedWindows[focusedID] {
-            if let element = wm.axElements[focusedID],
-               let title = AccessibilityBridge.getTitle(of: element), !title.isEmpty {
-                windowTitle = title
-            } else {
-                windowTitle = tracked.appName
-            }
-            if windowTitle.count > 40 {
-                windowTitle = String(windowTitle.prefix(37)) + "..."
-            }
+            appName = tracked.appName
         }
 
         let result = NSMutableAttributedString()
 
-        if !windowTitle.isEmpty {
-            result.append(NSAttributedString(string: "\(windowTitle)  ", attributes: [
+        // 1. Focused app name (leftmost, stable width)
+        if !appName.isEmpty {
+            result.append(NSAttributedString(string: "\(appName)  ", attributes: [
                 .font: titleFont, .foregroundColor: theme.titleColor
             ]))
         }
 
+        // 2. Layout indicator
         result.append(NSAttributedString(string: "\(layoutStr)  ", attributes: [
             .font: monoFont, .foregroundColor: theme.layoutColor
         ]))
 
-        // Virtual workspace numbers (with optional names)
+        // 3. Workspace indicators with ● / ○ + app icons
         for (idx, wsNum) in visibleWorkspaces.enumerated() {
             let isActive = wsNum == activeWS
+            let indicator = isActive ? "●" : "○"
             let label: String
             if let name = wm.config.workspaceNames[wsNum] {
-                label = "\(wsNum):\(name)"
+                label = "\(indicator)\(wsNum):\(name)"
             } else {
-                label = "\(wsNum)"
+                label = "\(indicator)\(wsNum)"
             }
 
             if isActive {
@@ -304,8 +359,25 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
                 ]))
             }
 
-            if idx < visibleWorkspaces.count - 1 {
+            // App icons for this workspace
+            let icons: [NSImage]
+            if isActive {
+                icons = workspaceAppIcons(trackedWindows: wm.trackedWindows)
+            } else if let ws = wsMgr.workspaces[monitorID]?[wsNum] {
+                icons = workspaceAppIcons(trackedWindows: ws.trackedWindows)
+            } else {
+                icons = []
+            }
+
+            if !icons.isEmpty {
                 result.append(NSAttributedString(string: " ", attributes: [.font: monoFont]))
+                for icon in icons {
+                    result.append(iconAttachment(icon))
+                }
+            }
+
+            if idx < visibleWorkspaces.count - 1 {
+                result.append(NSAttributedString(string: "  ", attributes: [.font: monoFont]))
             }
         }
 
@@ -337,14 +409,14 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func editConfig(_ sender: NSMenuItem) {
-        let configPath = NSString("~/.config/spacey/config").expandingTildeInPath
+        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
 
         let fm = FileManager.default
         if !fm.fileExists(atPath: configPath) {
             try? fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent,
                                     withIntermediateDirectories: true)
             let defaultConfig = """
-            # Spacey Configuration
+            # Paneless Configuration
             # Reload with Alt+Shift+R (or your reload_config binding)
 
             [layout]
@@ -402,7 +474,6 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             # alt+shift, rightbracket = grow_focused
             # alt+shift, leftbracket = shrink_focused
             # alt+shift, m = minimize
-            # alt+shift, g = toggle_scratchpad
             # alt+shift, comma = focus_monitor left
             # alt+shift, period = focus_monitor right
             # cmd+shift, h = position_left
@@ -449,7 +520,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
             let inputItem = NSMenuItem(title: "Grant Input Monitoring...", action: #selector(openInputMonitoringSettings(_:)), keyEquivalent: "")
             inputItem.target = self
             // Insert before Quit
-            let quitIdx = menu.items.firstIndex(where: { $0.title == "Quit Spacey" }) ?? menu.items.count
+            let quitIdx = menu.items.firstIndex(where: { $0.title == "Quit Paneless" }) ?? menu.items.count
             menu.insertItem(inputItem, at: quitIdx)
             menu.insertItem(NSMenuItem.separator(), at: quitIdx)
         }
@@ -462,7 +533,7 @@ class SpaceyAppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - NSMenuDelegate (dynamic workspace items)
 
-extension SpaceyAppDelegate: NSMenuDelegate {
+extension PanelessAppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         // Remove old dynamic items
         menu.items.filter { $0.tag >= spaceMenuItemTag }.forEach { menu.removeItem($0) }

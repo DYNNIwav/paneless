@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Spacey",
+    name: "Paneless",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Spacey",
-            path: "Sources/Spacey",
+            name: "Paneless",
+            path: "Sources/Paneless",
             linkerSettings: [
                 .linkedFramework("Cocoa"),
                 .linkedFramework("ApplicationServices"),

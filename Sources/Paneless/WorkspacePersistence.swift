@@ -1,11 +1,11 @@
 import Cocoa
 
 /// Persists workspace window assignments to disk so they can be restored after a reboot or crash.
-/// Saves to ~/.config/spacey/workspaces.json
+/// Saves to ~/.config/paneless/workspaces.json
 enum WorkspacePersistence {
 
     private static let savePath: String = {
-        let dir = NSString("~/.config/spacey").expandingTildeInPath
+        let dir = NSString("~/.config/paneless").expandingTildeInPath
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return (dir as NSString).appendingPathComponent("workspaces.json")
     }()
@@ -97,9 +97,9 @@ enum WorkspacePersistence {
             encoder.outputFormatting = .prettyPrinted
             let data = try encoder.encode(state)
             try data.write(to: URL(fileURLWithPath: savePath))
-            spaceyLog("Workspace state saved (\(savedWindows.count) windows)")
+            panelessLog("Workspace state saved (\(savedWindows.count) windows)")
         } catch {
-            spaceyLog("Failed to save workspace state: \(error)")
+            panelessLog("Failed to save workspace state: \(error)")
         }
     }
 
@@ -123,13 +123,13 @@ enum WorkspacePersistence {
 
             // Ignore stale state (older than 24 hours — windows are long gone)
             if Date().timeIntervalSince(state.timestamp) > 86400 {
-                spaceyLog("Ignoring stale workspace state (>24h old)")
+                panelessLog("Ignoring stale workspace state (>24h old)")
                 return nil
             }
 
             return state
         } catch {
-            spaceyLog("Failed to load workspace state: \(error)")
+            panelessLog("Failed to load workspace state: \(error)")
             return nil
         }
     }
@@ -199,7 +199,7 @@ enum WorkspacePersistence {
             wm.observer.syncKnownWindows(allKnown)
 
             wm.retile()
-            spaceyLog("Restored \(movedCount) windows to their saved workspaces")
+            panelessLog("Restored \(movedCount) windows to their saved workspaces")
         }
     }
 

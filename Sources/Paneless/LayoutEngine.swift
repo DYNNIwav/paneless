@@ -4,11 +4,11 @@ import Cocoa
 /// Replaces BSP tree with direct frame calculation for 1-4 windows.
 class LayoutEngine {
     var tiledWindows: [CGWindowID] = []
-    var config: SpaceyConfig
+    var config: PanelessConfig
     var layoutVariant: Int = 0
     var splitRatio: CGFloat = 0.5
 
-    init(config: SpaceyConfig) {
+    init(config: PanelessConfig) {
         self.config = config
     }
 

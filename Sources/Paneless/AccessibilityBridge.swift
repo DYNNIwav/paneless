@@ -375,7 +375,7 @@ enum AccessibilityBridge {
     @discardableResult
     static func pressWindowTileItem(pid: pid_t, action: NativeTiling.NativeTileAction) -> Bool {
         guard let windowMenu = findWindowMenu(pid: pid) else {
-            spaceyLog("pressWindowTileItem: no Window menu for pid \(pid)")
+            panelessLog("pressWindowTileItem: no Window menu for pid \(pid)")
             return false
         }
 
@@ -401,7 +401,7 @@ enum AccessibilityBridge {
             }
 
             guard let moveResize = findChildItem(in: windowMenu, title: "Move & Resize") else {
-                spaceyLog("pressWindowTileItem: 'Move & Resize' not found for pid \(pid)")
+                panelessLog("pressWindowTileItem: 'Move & Resize' not found for pid \(pid)")
                 return false
             }
             menuItem = findSubmenuItem(in: moveResize, title: submenuTitle)

@@ -59,7 +59,6 @@ enum WMAction {
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
     case minimizeToWorkspace
-    case toggleScratchpad
     case setMark(String)
     case jumpToMark(String)
 }

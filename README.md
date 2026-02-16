@@ -1,26 +1,26 @@
-# Spacey
+# Paneless
 
-A fast tiling window manager for macOS with virtual workspaces, Hyprland-style dimming, and smooth animations.
+Painless window management for macOS. A fast tiling window manager with virtual workspaces, smooth animations, and compositor-level dimming.
 
-Built with Swift using the Accessibility API and private CGS/SLS APIs. Works on macOS Sequoia without disabling SIP.
+Built with Swift. Works on macOS Sequoia without disabling SIP.
 
 ## Features
 
-- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. Optional named workspaces (e.g., "1:Main"). No native Spaces animation delays.
+- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. Named workspaces (e.g., `1:Code`, `2:Browser`) shown in the menu bar. No native Spaces animation delays.
 - **Automatic Tiling** — New windows are tiled automatically. 3 layout variants: side-by-side, stacked, and monocle.
-- **Hyprland-Style Animation** — GPU-composited animations using SLSSetWindowTransform (same technique as yabai). Exact Hyprland bezier curves and timing. New windows scale in (popin 87%), closing windows fade + shrink. Configurable: `animations = false` to disable.
-- **Window Dimming** — Unfocused tiled windows are dimmed with configurable opacity. Floating windows are never covered.
+- **Smooth Animations** — GPU-composited animations with Hyprland-style bezier curves. New windows scale in, closing windows fade + shrink. Configurable: `animations = false` to disable.
+- **Window Dimming** — Compositor-level dimming that follows window shape, rounded corners, and shadows perfectly. Configurable intensity.
 - **Multi-Monitor** — Independent workspace sets per monitor. Focus and move windows between monitors with keybindings.
 - **Smart Auto-Float** — Dialogs, small windows, and secondary app windows are automatically floated. Configurable per-app rules.
 - **Sticky Windows** — Pin apps (e.g. Spotify) to be visible on ALL workspaces.
-- **Window Marks** — Vim-style marks: tag any window and jump to it instantly, even across workspaces.
-- **Scratchpad** — Toggle a drop-down terminal (Ghostty) with Alt+Shift+G.
+- **Window Marks** — Vim-style marks: tag any window with `set_mark X` and jump to it with `jump_mark X`, even across workspaces.
+- **Fuzzy Workspace Restoration** — Workspace assignments persist across sessions and crashes. Windows are automatically restored to their previous workspaces on startup.
 - **Minimize to Workspace** — Alt+Shift+M hides window, Alt+Shift+number to restore.
 - **Window Borders** — Hyprland-style colored borders around the focused window.
 - **Focus Follows Mouse** — Optional: auto-focus the tiled window under the cursor.
 - **Mouse Drag Resize** — Ctrl+drag on the split divider to resize tiled windows.
 - **Crash Recovery** — Orphaned windows from a previous crash are restored on startup. Workspace assignments persist across sessions.
-- **Menu Bar** — Shows layout, active workspace, and window title. Click to switch workspaces or cycle layouts.
+- **Menu Bar** — Shows focused app, layout, active workspace with app icons. Click to switch workspaces or cycle layouts.
 - **Configurable Keybindings** — All keybindings can be remapped via config file.
 
 ## Requirements
@@ -40,21 +40,21 @@ Grant both in **System Settings > Privacy & Security**:
 ## Installation
 
 ```bash
-git clone https://github.com/DYNNIwav/spacey.git
-cd spacey
+git clone https://github.com/DYNNIwav/paneless.git
+cd paneless
 ./Scripts/build.sh
 ./Scripts/install.sh
 ```
 
-This installs `Spacey.app` to `~/Applications/` and the `spacey` CLI to `/usr/local/bin/`.
+This installs `Paneless.app` to `~/Applications/` and the `paneless` CLI to `/usr/local/bin/`.
 
 To start:
 
 ```bash
-open ~/Applications/Spacey.app
+open ~/Applications/Paneless.app
 ```
 
-To start at login: **System Settings > General > Login Items > add Spacey**.
+To start at login: **System Settings > General > Login Items > add Paneless**.
 
 ## Keybindings
 
@@ -140,19 +140,24 @@ Cycle with `Alt+Shift+Space`:
 
 ## Configuration
 
-Config file: `~/.config/spacey/config`
+Config file: `~/.config/paneless/config`
 
-A default config is created on first install. Edit it and Spacey auto-reloads on save.
+A default config is created on first install. Edit it and Paneless auto-reloads on save.
 
 ```ini
 [layout]
-inner_gap = 12
-outer_gap = 12
-dim_unfocused = 0.3
-single_window_padding = 20
-focus_follows_mouse = false
-native_animation = false
-auto_float_dialogs = true
+inner_gap = 8
+outer_gap = 8
+animations = true
+# native_animation = false
+# single_window_padding = 0
+# focus_follows_mouse = false
+# force_promotion = false
+# auto_float_dialogs = true
+
+# Dim unfocused windows using compositor brightness
+# 0.0 = off, 0.15 = subtle, 0.3 = moderate, 0.5 = strong
+dim_unfocused = 0.03
 
 [border]
 enabled = false
@@ -162,31 +167,52 @@ inactive_color = #444444
 radius = 10
 
 [rules]
-float = Finder, System Settings, Calculator, Archive Utility
+float = Finder, System Settings, Calculator, Archive Utility, System Preferences
 # exclude = SomeApp
+# sticky = Spotify
 
 [app_rules]
-# Pin apps to specific positions in the tiled layout
+# Pin apps to specific positions or workspaces
 # Arc = left
 # Ghostty = right
+# Slack = workspace 3
 
-# [workspaces]
-# 1 = Main
+[workspaces]
+# Named workspaces (shown in menu bar)
+# 1 = Code
 # 2 = Browser
 # 3 = Chat
 
 # [bindings]
 # Custom keybindings override ALL defaults (except workspace switching).
 # Format: modifiers, key = action
-# alt+shift, h = focus_left
-# alt+shift, l = focus_right
-# alt+shift, j = focus_down
-# alt+shift, k = focus_up
+#
+# alt+shift, h = focus_prev
+# alt+shift, l = focus_next
+# alt+shift, j = rotate_next
+# alt+shift, k = rotate_prev
 # alt+shift, return = swap_master
 # alt+shift, space = cycle_layout
 # alt+shift, t = toggle_float
 # alt+shift, f = toggle_fullscreen
 # alt+shift, q = close
+# alt+shift, r = reload_config
+# alt+shift, equal = increase_gap
+# alt+shift, minus = decrease_gap
+# alt+shift, rightbracket = grow_focused
+# alt+shift, leftbracket = shrink_focused
+# alt+shift, m = minimize
+# alt+shift, comma = focus_monitor left
+# alt+shift, period = focus_monitor right
+# cmd+shift, h = position_left
+# cmd+shift, l = position_right
+# cmd+shift, k = position_up
+# cmd+shift, j = position_down
+# cmd+shift, f = position_fill
+#
+# Window marks (vim-style):
+# alt+shift, a = set_mark a
+# alt, a = jump_mark a
 ```
 
 ### Config Reference
@@ -208,7 +234,7 @@ float = Finder, System Settings, Calculator, Archive Utility
 | border | `inactive_color` | #444444 | Unfocused window border color (hex) |
 | border | `radius` | 10 | Border corner radius |
 | rules | `float` | Finder, System Settings, ... | Comma-separated apps that always float |
-| rules | `exclude` | *(empty)* | Comma-separated apps ignored by Spacey |
+| rules | `exclude` | *(empty)* | Comma-separated apps ignored by Paneless |
 | rules | `sticky` | *(empty)* | Comma-separated apps visible on ALL workspaces |
 | app_rules | `App = left` | | Pin app to first tiled position |
 | app_rules | `App = right` | | Pin app to last tiled position |
@@ -238,6 +264,7 @@ For use in the `[bindings]` section:
 | `move_to_monitor left` / `move_to_monitor right` | Move window to neighbor monitor |
 | `switch_workspace N` | Switch to workspace N (1-9) |
 | `move_to_workspace N` | Move window to workspace N (1-9) |
+| `minimize` | Minimize focused window (hide off-screen, restore with Alt+Shift+M) |
 | `retile` | Reset layout and re-scan windows |
 | `reload_config` | Reload config file |
 | `set_mark X` | Mark focused window as "X" (vim-style) |
@@ -245,30 +272,30 @@ For use in the `[bindings]` section:
 
 ## CLI
 
-The `spacey` binary doubles as a CLI for scripting and integration:
+The `paneless` binary doubles as a CLI for scripting and integration:
 
 ```bash
-spacey --focus-workspace 3       # Switch to workspace 3
-spacey --list-workspaces         # List workspaces with windows
-spacey --help                    # Show help
+paneless --focus-workspace 3       # Switch to workspace 3
+paneless --list-workspaces         # List workspaces with windows
+paneless --help                    # Show help
 ```
 
 ## How It Works
 
-**Virtual workspaces** are implemented without native macOS Spaces. All windows live on a single Space. Switching workspaces hides windows by moving them off-screen (rift-style: bottom-right corner, 1px visible) and shows the target workspace's windows by restoring their positions. All moves are batched with `SLSDisableUpdate`/`SLSReenableUpdate` to prevent flickering.
+**Virtual workspaces** are implemented without native macOS Spaces. All windows live on a single Space. Workspace switching is instant — no native Spaces animation delays.
 
-**Window dimming** uses transparent NSWindow overlays positioned directly above each unfocused tiled window via `CGSOrderWindow`. Floating windows are never covered by dim overlays.
+**Window dimming** is compositor-level — it follows window shape, rounded corners, and shadows perfectly without overlays.
 
-**Animation** uses GPU-composited transforms (`SLSSetWindowTransform`) — the same technique as yabai. Windows are set to their final position via one batched AX call, then a reverse affine transform is applied so they visually appear at the start position. The transform animates back to identity at 120fps using Hyprland's exact cubic bezier curves (easeOutQuint). This means zero AX IPC per animation frame — all visual work is done by the compositor.
+**Animation** is GPU-composited at 120fps using Hyprland-style bezier curves. Zero per-frame IPC overhead.
 
-**Window detection** uses a 3-layer system: (1) a background-thread CGWindowList interceptor polling at 8ms during app launches that hides windows before they render, (2) AX observer callbacks that hide windows immediately in the callback thread, and (3) adaptive main-thread polling (0.5s active, 3s idle) as a fallback. New windows are hidden (alpha=0) at detection and faded in with a Hyprland-style popin animation at their tiled position.
+**Window detection** uses a multi-layer system that intercepts new windows before they render, so tiling appears instant with no visual flash at the app's default position.
 
 ## Uninstall
 
 ```bash
-rm -rf ~/Applications/Spacey.app
-sudo rm -f /usr/local/bin/spacey
-rm -rf ~/.config/spacey
+rm -rf ~/Applications/Paneless.app
+sudo rm -f /usr/local/bin/paneless
+rm -rf ~/.config/paneless
 ```
 
 ## Acknowledgements

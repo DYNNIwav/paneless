@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.spacey.app</string>
+    <string>com.paneless.app</string>
     <key>CFBundleName</key>
-    <string>Spacey</string>
+    <string>Paneless</string>
     <key>CFBundleDisplayName</key>
-    <string>Spacey</string>
+    <string>Paneless</string>
     <key>CFBundleExecutable</key>
-    <string>Spacey</string>
+    <string>Paneless</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -18,7 +18,9 @@
     <string>APPL</string>
     <key>LSUIElement</key>
     <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Spacey needs Accessibility access to manage window positions and focus.</string>
+    <string>Paneless needs Accessibility access to manage window positions and focus.</string>
 </dict>
 </plist>

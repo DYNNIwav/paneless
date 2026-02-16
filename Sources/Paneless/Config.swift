@@ -1,6 +1,6 @@
 import Cocoa
 
-struct SpaceyConfig {
+struct PanelessConfig {
     var innerGap: CGFloat = 8
     var outerGap: CGFloat = 8
     var spaceSwitchModifier: String = "alt"
@@ -124,20 +124,17 @@ struct SpaceyConfig {
         // Minimize window: Alt+Shift+M
         if let m = KeyNames.keyCode(for: "m") { bindings.append(KeyBinding(modifiers: altShift, keyCode: m, action: .minimizeToWorkspace)) }
 
-        // Toggle scratchpad (Ghostty): Alt+Shift+G
-        if let g = KeyNames.keyCode(for: "g") { bindings.append(KeyBinding(modifiers: altShift, keyCode: g, action: .toggleScratchpad)) }
-
         return bindings
     }
 
     // MARK: - Load
 
-    static func load() -> SpaceyConfig {
-        var config = SpaceyConfig()
+    static func load() -> PanelessConfig {
+        var config = PanelessConfig()
 
-        let configPath = NSString("~/.config/spacey/config").expandingTildeInPath
+        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
         guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
-            spaceyLog("No config file at \(configPath), using defaults")
+            panelessLog("No config file at \(configPath), using defaults")
             config.keyBindings = defaultKeyBindings()
             return config
         }
@@ -241,7 +238,7 @@ struct SpaceyConfig {
         config.excludeApps.formUnion(resolveBundleIDs(config.excludeApps))
         config.stickyApps.formUnion(resolveBundleIDs(config.stickyApps))
 
-        spaceyLog("Config loaded from \(configPath)")
+        panelessLog("Config loaded from \(configPath)")
         return config
     }
 
@@ -294,12 +291,12 @@ struct SpaceyConfig {
 
         let modifiers = KeyNames.parseModifiers(modString)
         guard let keyCode = KeyNames.keyCode(for: keyName) else {
-            spaceyLog("Unknown key name in binding: '\(keyName)'")
+            panelessLog("Unknown key name in binding: '\(keyName)'")
             return nil
         }
 
         guard let action = parseAction(value) else {
-            spaceyLog("Unknown action in binding: '\(value)'")
+            panelessLog("Unknown action in binding: '\(value)'")
             return nil
         }
 
@@ -350,7 +347,6 @@ struct SpaceyConfig {
             if let n = arg.flatMap({ Int($0) }), n >= 1, n <= 9 { return .moveToWorkspace(n) }
             return nil
         case "minimize": return .minimizeToWorkspace
-        case "toggle_scratchpad": return .toggleScratchpad
         case "set_mark":
             if let key = arg, !key.isEmpty { return .setMark(key) }
             return nil
