@@ -46,12 +46,7 @@ brew tap DYNNIwav/paneless
 brew install --HEAD paneless
 ```
 
-Then symlink the app bundle and start it:
-
-```bash
-ln -sf $(brew --prefix)/opt/paneless/Paneless.app ~/Applications/Paneless.app
-open ~/Applications/Paneless.app
-```
+This installs the CLI and automatically symlinks `Paneless.app` to `~/Applications`.
 
 To upgrade to the latest version:
 
