@@ -1535,6 +1535,10 @@ class WindowManager: WindowObserverDelegate {
         // random app from another workspace focused
         if layoutEngine.tiledWindows.isEmpty && floatingWindows.isEmpty {
             focusDesktop()
+        } else if let fid = focusedWindowID,
+                  let element = axElements[fid],
+                  let tracked = trackedWindows[fid] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
         } else if let firstWid = layoutEngine.tiledWindows.first,
                   let element = axElements[firstWid],
                   let tracked = trackedWindows[firstWid] {
