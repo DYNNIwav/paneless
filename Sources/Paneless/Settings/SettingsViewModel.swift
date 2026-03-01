@@ -28,6 +28,19 @@ class SettingsViewModel: ObservableObject {
     @Published var borderInactiveColor: Color = Color(red: 0.27, green: 0.27, blue: 0.27)
     @Published var borderRadius: CGFloat = 10
 
+    // MARK: - Rules
+
+    @Published var floatApps: [String] = []
+    @Published var excludeApps: [String] = []
+    @Published var stickyApps: [String] = []
+    @Published var swallowApps: [String] = []
+    @Published var appLayoutRules: [String: String] = [:]
+
+    // MARK: - Workspaces
+
+    @Published var workspaceNames: [Int: String] = [:]
+    @Published var appWorkspaceRules: [String: Int] = [:]
+
     // MARK: - Menu Bar
 
     @Published var menubarActiveColor: Color? = nil
@@ -83,6 +96,15 @@ class SettingsViewModel: ObservableObject {
             hyperkeyOption = "disabled"
         }
 
+        // Filter out bundle IDs for display, keep only human-readable names
+        floatApps = config.floatApps.filter { !$0.contains(".") }.sorted()
+        excludeApps = config.excludeApps.filter { !$0.contains(".") }.sorted()
+        stickyApps = config.stickyApps.filter { !$0.contains(".") }.sorted()
+        swallowApps = config.swallowApps.filter { !$0.contains(".") }.sorted()
+        appLayoutRules = config.appLayoutRules
+        workspaceNames = config.workspaceNames
+        appWorkspaceRules = config.appWorkspaceRules
+
         borderEnabled = config.border.enabled
         borderWidth = config.border.width
         borderActiveColor = Color(config.border.activeColor)
@@ -135,6 +157,14 @@ class SettingsViewModel: ObservableObject {
         } else {
             config.hyperkeyCode = KeyNames.keyCode(for: hyperkeyOption)
         }
+
+        config.floatApps = Set(floatApps)
+        config.excludeApps = Set(excludeApps)
+        config.stickyApps = Set(stickyApps)
+        config.swallowApps = Set(swallowApps)
+        config.appLayoutRules = appLayoutRules
+        config.workspaceNames = workspaceNames
+        config.appWorkspaceRules = appWorkspaceRules
 
         config.border.enabled = borderEnabled
         config.border.width = borderWidth

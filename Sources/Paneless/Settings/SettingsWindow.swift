@@ -13,8 +13,14 @@ struct SettingsView: View {
 
             AppearanceTab(viewModel: viewModel)
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
+
+            RulesTab(viewModel: viewModel)
+                .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
+
+            WorkspacesTab(viewModel: viewModel)
+                .tabItem { Label("Workspaces", systemImage: "square.grid.2x2") }
         }
-        .frame(width: 520, height: 460)
+        .frame(width: 560, height: 520)
     }
 }
 
@@ -26,7 +32,7 @@ class SettingsWindow: NSWindow, NSWindowDelegate {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
