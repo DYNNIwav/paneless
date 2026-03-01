@@ -41,6 +41,10 @@ class SettingsViewModel: ObservableObject {
     @Published var workspaceNames: [Int: String] = [:]
     @Published var appWorkspaceRules: [String: Int] = [:]
 
+    // MARK: - Keybindings
+
+    @Published var bindings: [EditableBinding] = []
+
     // MARK: - Menu Bar
 
     @Published var menubarActiveColor: Color? = nil
@@ -105,6 +109,14 @@ class SettingsViewModel: ObservableObject {
         workspaceNames = config.workspaceNames
         appWorkspaceRules = config.appWorkspaceRules
 
+        // Load keybindings, filtering out auto-generated workspace bindings
+        let wsKeys = Set(PanelessConfig.workspaceKeyBindings().map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
+        bindings = config.keyBindings.compactMap { binding in
+            let key = "\(binding.modifiers.rawValue)-\(binding.keyCode)"
+            if wsKeys.contains(key) { return nil }
+            return EditableBinding(from: binding)
+        }
+
         borderEnabled = config.border.enabled
         borderWidth = config.border.width
         borderActiveColor = Color(config.border.activeColor)
@@ -165,6 +177,11 @@ class SettingsViewModel: ObservableObject {
         config.appLayoutRules = appLayoutRules
         config.workspaceNames = workspaceNames
         config.appWorkspaceRules = appWorkspaceRules
+
+        // Convert UI bindings back to KeyBinding, then merge with workspace defaults
+        let customBindings = bindings.compactMap { $0.toKeyBinding() }
+        let wsBindings = PanelessConfig.workspaceKeyBindings()
+        config.keyBindings = customBindings + wsBindings
 
         config.border.enabled = borderEnabled
         config.border.width = borderWidth

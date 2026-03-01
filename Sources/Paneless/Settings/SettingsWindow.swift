@@ -19,8 +19,11 @@ struct SettingsView: View {
 
             WorkspacesTab(viewModel: viewModel)
                 .tabItem { Label("Workspaces", systemImage: "square.grid.2x2") }
+
+            KeybindingsTab(viewModel: viewModel)
+                .tabItem { Label("Keys", systemImage: "keyboard") }
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 620, height: 520)
     }
 }
 
@@ -32,7 +35,7 @@ class SettingsWindow: NSWindow, NSWindowDelegate {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

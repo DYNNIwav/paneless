@@ -145,6 +145,12 @@ enum KeyNames {
         "slash": 44, "backslash": 42, "grave": 50,
     ]
 
+    /// All unique key names sorted alphabetically (excludes aliases like "enter", "esc", "capslock", "backspace")
+    static let allKeyNames: [String] = {
+        let aliases: Set<String> = ["enter", "esc", "capslock", "backspace"]
+        return Array(Set(nameToCode.keys).subtracting(aliases)).sorted()
+    }()
+
     static func keyCode(for name: String) -> UInt16? {
         return nameToCode[name.lowercased()]
     }

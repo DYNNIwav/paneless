@@ -328,7 +328,7 @@ struct PanelessConfig {
     }
 
     /// Workspace keybindings — always added, even with custom [bindings] section
-    private static func workspaceKeyBindings() -> [KeyBinding] {
+    static func workspaceKeyBindings() -> [KeyBinding] {
         var bindings: [KeyBinding] = []
         let alt: CGEventFlags = [.maskAlternate]
         let altShift: CGEventFlags = [.maskAlternate, .maskShift]
@@ -364,7 +364,7 @@ struct PanelessConfig {
         return KeyBinding(modifiers: modifiers, keyCode: keyCode, action: action)
     }
 
-    private static func parseAction(_ str: String) -> WMAction? {
+    static func parseAction(_ str: String) -> WMAction? {
         let parts = str.split(separator: " ", maxSplits: 1)
         let action = parts[0].lowercased()
         let arg = parts.count > 1 ? String(parts[1]) : nil
