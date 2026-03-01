@@ -51,6 +51,13 @@ git add Casks/paneless.rb
 git commit -m "Update to $VERSION"
 git push origin main
 
+# Sync the local Homebrew tap so `brew reinstall` picks up the new version immediately
+LOCAL_TAP="$(brew --repository 2>/dev/null)/Library/Taps/dynniwav/homebrew-paneless"
+if [ -d "$LOCAL_TAP" ]; then
+  echo "==> Syncing local Homebrew tap..."
+  git -C "$LOCAL_TAP" pull --ff-only origin main
+fi
+
 echo ""
 echo "==> Done! Released $VERSION"
 echo "    brew upgrade --cask paneless"
