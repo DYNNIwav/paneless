@@ -447,45 +447,49 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             # 2 = Browser
             # 3 = Chat
 
-            # [bindings]
+            [bindings]
             # Custom bindings are merged with defaults (custom takes priority).
-            # You only need to list additions or overrides here.
             # Format: modifier, key = action
-            #
-            # alt+shift, h = focus_prev
-            # alt+shift, l = focus_next
-            # alt+shift, j = rotate_next
-            # alt+shift, k = rotate_prev
-            # alt+shift, return = swap_master
-            # alt+shift, space = cycle_layout
-            # alt+shift, t = toggle_float
-            # alt+shift, f = toggle_fullscreen
-            # alt+shift, q = close
-            # alt+shift, r = reload_config
-            # alt+shift, equal = increase_gap
-            # alt+shift, minus = decrease_gap
-            # alt+shift, rightbracket = grow_focused
-            # alt+shift, leftbracket = shrink_focused
-            # alt+shift, m = minimize
-            # alt+shift, comma = focus_monitor left
-            # alt+shift, period = focus_monitor right
-            # cmd+shift, h = position_left
-            # cmd+shift, l = position_right
-            # cmd+shift, k = position_up
-            # cmd+shift, j = position_down
-            # cmd+shift, f = position_fill
-            #
+            alt+shift, h = focus_prev
+            alt+shift, l = focus_next
+            alt+shift, j = rotate_next
+            alt+shift, k = rotate_prev
+            alt+shift, return = swap_master
+            alt+shift, space = cycle_layout
+            alt+shift, t = toggle_float
+            alt+shift, f = toggle_fullscreen
+            alt+shift, q = close
+            alt+shift, r = reload_config
+            alt+shift, equal = increase_gap
+            alt+shift, minus = decrease_gap
+            alt+shift, rightbracket = grow_focused
+            alt+shift, leftbracket = shrink_focused
+            alt+shift, m = minimize
+            alt+shift, comma = focus_monitor left
+            alt+shift, period = focus_monitor right
+            cmd+shift, h = position_left
+            cmd+shift, l = position_right
+            cmd+shift, k = position_up
+            cmd+shift, j = position_down
+            cmd+shift, f = position_fill
+
             # Window marks (vim-style):
             # alt+shift, a = set_mark a
             # alt, a = jump_mark a
-            #
+
             # Niri multi-window columns:
             # alt+shift, c = niri_consume
             # alt+shift, x = niri_expel
-            #
+
             # Hyperkey bindings (requires hyperkey = ... in [layout]):
             # hyper, h = focus_prev
             # hyper, l = focus_next
+            # hyper, j = rotate_next
+            # hyper, k = rotate_prev
+            # hyper, f = toggle_fullscreen
+            # hyper, t = toggle_float
+            # hyper, q = close
+            # hyper, space = cycle_layout
             # hyper, 1 = switch_workspace 1
             """
             try? defaultConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
