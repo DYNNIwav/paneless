@@ -149,6 +149,26 @@ enum KeyNames {
         return nameToCode[name.lowercased()]
     }
 
+    static func keyName(for code: UInt16) -> String? {
+        for (name, c) in nameToCode where c == code {
+            return name
+        }
+        return nil
+    }
+
+    static func modifierString(_ flags: CGEventFlags) -> String {
+        var parts: [String] = []
+        if flags.contains(.maskControl) && flags.contains(.maskAlternate)
+            && flags.contains(.maskCommand) && flags.contains(.maskShift) {
+            return "hyper"
+        }
+        if flags.contains(.maskControl) { parts.append("ctrl") }
+        if flags.contains(.maskAlternate) { parts.append("alt") }
+        if flags.contains(.maskShift) { parts.append("shift") }
+        if flags.contains(.maskCommand) { parts.append("cmd") }
+        return parts.joined(separator: "+")
+    }
+
     static func parseModifiers(_ modString: String) -> CGEventFlags {
         var flags = CGEventFlags()
         let parts = modString.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -185,5 +205,12 @@ extension NSColor {
         let g = CGFloat((value >> 8) & 0xFF) / 255.0
         let b = CGFloat(value & 0xFF) / 255.0
         return NSColor(red: r, green: g, blue: b, alpha: 1.0)
+    }
+
+    func toHex() -> String {
+        let c = usingColorSpace(.sRGB) ?? self
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "#%02x%02x%02x", Int(r * 255), Int(g * 255), Int(b * 255))
     }
 }

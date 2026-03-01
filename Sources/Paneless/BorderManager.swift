@@ -30,10 +30,10 @@ class BorderManager {
 
         currentFocusedID = windowID
 
-        guard let _ = windowID, let frame = frame else { return }
+        guard let windowID = windowID, let frame = frame else { return }
 
         activeBorder = makeBorderWindow(frame: frame, color: config.activeColor)
-        activeBorder?.orderFrontRegardless()
+        activeBorder?.order(.below, relativeTo: Int(windowID))
     }
 
     /// Update border positions after a retile (windows may have moved)
@@ -47,9 +47,10 @@ class BorderManager {
                 let borderFrame = borderRect(for: layout.1)
                 let cocoaFrame = axToCocoaFrame(borderFrame)
                 border.setFrame(cocoaFrame, display: true)
+                border.order(.below, relativeTo: Int(focusedID))
             } else {
                 activeBorder = makeBorderWindow(frame: layout.1, color: config.activeColor)
-                activeBorder?.orderFrontRegardless()
+                activeBorder?.order(.below, relativeTo: Int(focusedID))
             }
         }
     }
@@ -78,25 +79,31 @@ class BorderManager {
         )
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue + 2)
+        window.level = .normal
         window.ignoresMouseEvents = true
         window.hasShadow = false
         window.collectionBehavior = [.stationary]
+
+        // The stroke center sits at borderWidth/2 from the border window edge.
+        // To make the inner stroke edge match the window's corner radius,
+        // the path radius = windowRadius + borderWidth/2.
+        let pathRadius = config.radius + config.width / 2
 
         let borderView = BorderView(
             frame: NSRect(origin: .zero, size: cocoaFrame.size),
             borderColor: color,
             borderWidth: config.width,
-            cornerRadius: config.radius
+            cornerRadius: pathRadius
         )
         window.contentView = borderView
 
         return window
     }
 
-    /// Expand the window frame by the border width to surround it
+    /// Expand the window frame by the border width to surround it.
+    /// The border overlaps slightly under the window so there's no gap.
     private func borderRect(for windowFrame: CGRect) -> CGRect {
-        let inset = config.width + 1
+        let inset = config.width
         return windowFrame.insetBy(dx: -inset, dy: -inset)
     }
 

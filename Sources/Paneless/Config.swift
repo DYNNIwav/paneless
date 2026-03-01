@@ -419,4 +419,151 @@ struct PanelessConfig {
         default: return nil
         }
     }
+
+    // MARK: - Action to String
+
+    static func actionString(_ action: WMAction) -> String? {
+        switch action {
+        case .focusDirection(.left): return "focus_left"
+        case .focusDirection(.down): return "focus_down"
+        case .focusDirection(.up): return "focus_up"
+        case .focusDirection(.right): return "focus_right"
+        case .focusNext: return "focus_next"
+        case .focusPrev: return "focus_prev"
+        case .swapWithMaster: return "swap_master"
+        case .toggleFloat: return "toggle_float"
+        case .toggleFullscreen: return "toggle_fullscreen"
+        case .closeFocused: return "close"
+        case .retile: return "retile"
+        case .reloadConfig: return "reload_config"
+        case .focusMonitor(let dir): return "focus_monitor \(dir.rawValue)"
+        case .moveToMonitor(let dir): return "move_to_monitor \(dir.rawValue)"
+        case .positionLeft: return "position_left"
+        case .positionRight: return "position_right"
+        case .positionUp: return "position_up"
+        case .positionDown: return "position_down"
+        case .positionFill: return "position_fill"
+        case .positionCenter: return "position_center"
+        case .cycleLayout: return "cycle_layout"
+        case .increaseGap: return "increase_gap"
+        case .decreaseGap: return "decrease_gap"
+        case .growFocused: return "grow_focused"
+        case .shrinkFocused: return "shrink_focused"
+        case .rotateNext: return "rotate_next"
+        case .rotatePrev: return "rotate_prev"
+        case .switchWorkspace(let n): return "switch_workspace \(n)"
+        case .moveToWorkspace(let n): return "move_to_workspace \(n)"
+        case .minimizeToWorkspace: return "minimize"
+        case .setMark(let key): return "set_mark \(key)"
+        case .jumpToMark(let key): return "jump_mark \(key)"
+        case .niriConsume: return "niri_consume"
+        case .niriExpel: return "niri_expel"
+        }
+    }
+
+    // MARK: - Save
+
+    func save() {
+        var lines: [String] = []
+        lines.append("# Paneless Configuration")
+        lines.append("")
+
+        // [layout]
+        lines.append("[layout]")
+        lines.append("inner_gap = \(Int(innerGap))")
+        lines.append("outer_gap = \(Int(outerGap))")
+        lines.append("animations = \(animations)")
+        lines.append("native_animation = \(nativeAnimation)")
+        lines.append("single_window_padding = \(Int(singleWindowPadding))")
+        lines.append("focus_follows_mouse = \(focusFollowsMouse)")
+        lines.append("force_promotion = \(forceProMotion)")
+        lines.append("auto_float_dialogs = \(autoFloatDialogs)")
+        lines.append("focus_follows_app = \(focusFollowsApp)")
+        lines.append("dim_unfocused = \(dimUnfocused)")
+        lines.append("tiling_mode = \(tilingMode)")
+        if tilingMode == "niri" {
+            lines.append("niri_column_width = \(niriColumnWidth)")
+        }
+        if let code = hyperkeyCode, let name = KeyNames.keyName(for: code) {
+            lines.append("hyperkey = \(name)")
+        }
+        lines.append("")
+
+        // [border]
+        lines.append("[border]")
+        lines.append("enabled = \(border.enabled)")
+        lines.append("width = \(Int(border.width))")
+        lines.append("active_color = \(border.activeColor.toHex())")
+        lines.append("inactive_color = \(border.inactiveColor.toHex())")
+        lines.append("radius = \(Int(border.radius))")
+        lines.append("")
+
+        // [rules]
+        lines.append("[rules]")
+        // Filter out bundle IDs, keep only human-readable names
+        let floatNames = floatApps.filter { !$0.contains(".") }.sorted()
+        if !floatNames.isEmpty { lines.append("float = \(floatNames.joined(separator: ", "))") }
+        let excludeNames = excludeApps.filter { !$0.contains(".") }.sorted()
+        if !excludeNames.isEmpty { lines.append("exclude = \(excludeNames.joined(separator: ", "))") }
+        let stickyNames = stickyApps.filter { !$0.contains(".") }.sorted()
+        if !stickyNames.isEmpty { lines.append("sticky = \(stickyNames.joined(separator: ", "))") }
+        let swallowNames = swallowApps.filter { !$0.contains(".") }.sorted()
+        if !swallowNames.isEmpty { lines.append("swallow = \(swallowNames.joined(separator: ", "))") }
+        if swallowAll { lines.append("swallow_all = true") }
+        lines.append("")
+
+        // [app_rules]
+        if !appLayoutRules.isEmpty || !appWorkspaceRules.isEmpty {
+            lines.append("[app_rules]")
+            for (app, dir) in appLayoutRules.sorted(by: { $0.key < $1.key }) {
+                lines.append("\(app) = \(dir)")
+            }
+            for (app, ws) in appWorkspaceRules.sorted(by: { $0.key < $1.key }) {
+                lines.append("\(app) = workspace \(ws)")
+            }
+            lines.append("")
+        }
+
+        // [menubar]
+        if menubarActiveColor != nil || menubarInactiveColor != nil {
+            lines.append("[menubar]")
+            if let c = menubarActiveColor { lines.append("active_color = \(c.toHex())") }
+            if let c = menubarInactiveColor { lines.append("inactive_color = \(c.toHex())") }
+            lines.append("")
+        }
+
+        // [workspaces]
+        if !workspaceNames.isEmpty {
+            lines.append("[workspaces]")
+            for (num, name) in workspaceNames.sorted(by: { $0.key < $1.key }) {
+                lines.append("\(num) = \(name)")
+            }
+            lines.append("")
+        }
+
+        // [bindings] - only write non-default, non-workspace bindings
+        let wsKeys = Set(PanelessConfig.workspaceKeyBindings().map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
+
+        var bindingLines: [String] = []
+        for binding in keyBindings {
+            let key = "\(binding.modifiers.rawValue)-\(binding.keyCode)"
+            if wsKeys.contains(key) { continue }
+            guard let keyName = KeyNames.keyName(for: binding.keyCode),
+                  let actionStr = PanelessConfig.actionString(binding.action) else { continue }
+            let modStr = KeyNames.modifierString(binding.modifiers)
+            bindingLines.append("\(modStr), \(keyName) = \(actionStr)")
+        }
+        if !bindingLines.isEmpty {
+            lines.append("[bindings]")
+            lines += bindingLines
+            lines.append("")
+        }
+
+        let content = lines.joined(separator: "\n")
+        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
+        let dir = (configPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
+        panelessLog("Config saved to \(configPath)")
+    }
 }

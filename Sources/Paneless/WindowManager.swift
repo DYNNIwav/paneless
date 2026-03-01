@@ -51,6 +51,9 @@ class WindowManager: WindowObserverDelegate {
     // Focus-follows-app: guard against re-entrant workspace switches
     private var isAutoSwitching = false
 
+    // Settings UI: skip next config reload (the UI just wrote the file)
+    var suppressNextReload = false
+
     private init() {
         self.config = PanelessConfig.load()
         self.layoutEngine = LayoutEngine(config: config)
@@ -505,6 +508,11 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Config Reload
 
     private func reloadConfig() {
+        if suppressNextReload {
+            suppressNextReload = false
+            panelessLog("Config reload suppressed (settings UI wrote the file)")
+            return
+        }
         let oldMode = config.tilingMode
         config = PanelessConfig.load()
         layoutEngine.config = config

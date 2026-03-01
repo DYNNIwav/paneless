@@ -36,6 +36,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
     private var configWatcherSource: DispatchSourceFileSystemObject?
     private var permissionCheckTimer: Timer?
     private var accessibilityGranted = false
+    private var settingsWindow: SettingsWindow?
 
     // Tag for dynamic workspace menu items
     private let spaceMenuItemTag = 9000
@@ -147,6 +148,11 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         )
 
         source.setEventHandler { [weak self] in
+            if WindowManager.shared.suppressNextReload {
+                WindowManager.shared.suppressNextReload = false
+                panelessLog("Config file change from settings UI, skipping reload")
+                return
+            }
             panelessLog("Config file changed on disk, reloading")
             self?.performConfigReload()
 
@@ -209,6 +215,11 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         let editConfigItem = NSMenuItem(title: "Edit Config...", action: #selector(editConfig(_:)), keyEquivalent: "")
         editConfigItem.target = self
         menu.addItem(editConfigItem)
+
+        let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        prefsItem.keyEquivalentModifierMask = .command
+        prefsItem.target = self
+        menu.addItem(prefsItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -362,6 +373,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
 
     private func performConfigReload() {
         WindowManager.shared.handleAction(.reloadConfig)
+        settingsWindow?.viewModel.loadFromConfig()
         showReloadIndicator()
     }
 
@@ -530,6 +542,13 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             menu.insertItem(inputItem, at: quitIdx)
             menu.insertItem(NSMenuItem.separator(), at: quitIdx)
         }
+    }
+
+    @objc private func openSettings(_ sender: Any?) {
+        if settingsWindow == nil {
+            settingsWindow = SettingsWindow()
+        }
+        settingsWindow?.showWindow()
     }
 
     @objc private func quit(_ sender: NSMenuItem) {
