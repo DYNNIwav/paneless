@@ -51,6 +51,18 @@ class WindowManager: WindowObserverDelegate {
     // Focus-follows-app: guard against re-entrant workspace switches
     private var isAutoSwitching = false
 
+    // The monitor whose active workspace is currently loaded into the live set
+    // (trackedWindows / axElements / layoutEngine). Used to migrate state when a
+    // display is disconnected so windows aren't stranded under a dead monitor ID.
+    private var liveMonitorID: String = ""
+
+    // Debounce display-reconfiguration bursts (macOS fires several notifications)
+    private var displayReconfigWorkItem: DispatchWorkItem?
+
+    // When a window was last destroyed. Used to distinguish a genuine app activation
+    // from macOS auto-activating the next app after the user closed the last window.
+    private var lastWindowDestroyedAt: Date = .distantPast
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -91,6 +103,7 @@ class WindowManager: WindowObserverDelegate {
         let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
         WorkspaceManager.shared.activeWorkspace[monitorID] = 1
+        liveMonitorID = monitorID
         saveWorkspaceState(workspace: 1, monitor: monitorID)
         panelessLog("Initialized workspace 1 on \(monitorID) with \(layoutEngine.tiledWindows.count) tiled windows")
 
@@ -992,6 +1005,8 @@ class WindowManager: WindowObserverDelegate {
     func windowDestroyed(windowID: CGWindowID) {
         guard trackedWindows[windowID] != nil else { return }
 
+        lastWindowDestroyedAt = Date()
+
         // Clean up minimized state
         minimizedWindows.remove(windowID)
         niriHiddenWindows.remove(windowID)
@@ -1180,26 +1195,111 @@ class WindowManager: WindowObserverDelegate {
         let hasWindowOnCurrent = trackedWindows.values.contains { $0.pid == pid }
         if hasWindowOnCurrent { return }
 
-        // Don't follow app activation away from an empty workspace.
-        // This happens when closing the last window — macOS activates the
-        // next app in Z-order, which may have windows on another workspace.
-        // The user should stay on their current workspace.
-        if layoutEngine.tiledWindows.isEmpty && floatingWindows.isEmpty {
-            panelessLog("Focus-follows-app: suppressed on empty workspace (closed last window)")
+        // Don't follow app activation that was triggered by closing the last window:
+        // macOS then activates the next app in Z-order, which may live on another
+        // workspace. We detect that case by a window having just been destroyed, rather
+        // than blocking all activations on an empty workspace (which would prevent a
+        // genuine Raycast/Cmd-Tab activation from summoning a window here).
+        if Date().timeIntervalSince(lastWindowDestroyedAt) < 0.4 {
+            panelessLog("Focus-follows-app: suppressed (window closed <400ms ago)")
             return
         }
 
-        // Search other workspaces for windows belonging to this app's PID
+        // Search other workspaces for windows belonging to this app's PID and pull
+        // them onto the current workspace so the user stays in context.
         guard let monitorWorkspaces = WorkspaceManager.shared.workspaces[monitorID] else { return }
-        for (wsNum, ws) in monitorWorkspaces where wsNum != currentWS {
-            if ws.trackedWindows.values.contains(where: { $0.pid == pid }) {
-                panelessLog("Focus-follows-app: \(name) (pid \(pid)) on workspace \(wsNum), switching")
-                isAutoSwitching = true
-                switchVirtualWorkspace(wsNum)
-                isAutoSwitching = false
-                return
-            }
+        let hasWindowElsewhere = monitorWorkspaces.contains { wsNum, ws in
+            wsNum != currentWS && ws.trackedWindows.values.contains { $0.pid == pid }
         }
+        if hasWindowElsewhere {
+            panelessLog("Focus-follows-app: summoning \(name) (pid \(pid)) to workspace \(currentWS)")
+            isAutoSwitching = true
+            summonAppWindowsToCurrentWorkspace(pid: pid)
+            isAutoSwitching = false
+        }
+    }
+
+    /// Pull every window belonging to `pid` that is parked on another workspace of the
+    /// current monitor onto the current (active) workspace, un-parking it. This is the
+    /// mirror of `moveToVirtualWorkspace`: stored workspace state -> live set.
+    private func summonAppWindowsToCurrentWorkspace(pid: pid_t) {
+        let wsMgr = WorkspaceManager.shared
+        let screen = NSScreen.safeMain
+        let monitorID = wsMgr.screenID(for: screen)
+        let currentWS = wsMgr.activeWorkspace[monitorID] ?? 1
+        let screenFrame = screenFrameInAX(for: screen)
+        guard let monitorWorkspaces = wsMgr.workspaces[monitorID] else { return }
+
+        var summoned: [CGWindowID] = []
+        var lastSummoned: CGWindowID?
+
+        for (wsNum, var ws) in monitorWorkspaces where wsNum != currentWS {
+            let matches = ws.trackedWindows.filter { $0.value.pid == pid }.map { $0.key }
+            guard !matches.isEmpty else { continue }
+
+            for wid in matches {
+                guard !stickyWindows.contains(wid) else { continue }
+
+                let tracked = ws.trackedWindows.removeValue(forKey: wid)
+                let element = ws.axElements.removeValue(forKey: wid)
+                let wasFloating = ws.floatingWindows.remove(wid) != nil
+                let wasFullscreen = ws.fullscreenWindows.remove(wid) != nil
+                ws.tiledWindows.removeAll { $0 == wid }
+
+                // Add to the live (current) workspace
+                if let tracked = tracked { trackedWindows[wid] = tracked }
+                if let element = element { axElements[wid] = element }
+
+                if wasFloating || wasFullscreen {
+                    if wasFloating { floatingWindows.insert(wid) }
+                    if wasFullscreen { fullscreenWindows.insert(wid) }
+                    // Un-park: place visibly on the current screen. Keep the saved frame
+                    // if it lands inside this screen, otherwise center it.
+                    if let element = element {
+                        let saved = tracked?.frame ?? .zero
+                        let target = screenFrame.contains(CGPoint(x: saved.midX, y: saved.midY)) && saved.width > 1
+                            ? saved
+                            : centeredFrame(for: saved.size, in: screenFrame)
+                        AccessibilityBridge.setFrame(of: element, to: target)
+                        trackedWindows[wid]?.frame = target
+                    }
+                } else {
+                    layoutEngine.insert(windowID: wid, afterFocused: focusedWindowID)
+                }
+
+                summoned.append(wid)
+                lastSummoned = wid
+            }
+
+            wsMgr.workspaces[monitorID]?[wsNum] = ws
+        }
+
+        guard !summoned.isEmpty else { return }
+
+        retile()
+        restoreFloatingWindowPositions()
+
+        if let target = lastSummoned, let el = axElements[target], let t = trackedWindows[target] {
+            AccessibilityBridge.focus(window: el, pid: t.pid)
+            focusedWindowID = target
+        }
+
+        // Persist the new assignments and refresh the active workspace snapshot.
+        saveWorkspaceState(workspace: currentWS, monitor: monitorID)
+        onSpaceChange?()
+        panelessLog("Summoned \(summoned.count) window(s) to workspace \(currentWS)")
+    }
+
+    /// A frame of `size` centered within `region` (AX coordinates).
+    private func centeredFrame(for size: CGSize, in region: CGRect) -> CGRect {
+        let w = size.width > 1 ? min(size.width, region.width) : region.width * 0.6
+        let h = size.height > 1 ? min(size.height, region.height) : region.height * 0.6
+        return CGRect(
+            x: region.midX - w / 2,
+            y: region.midY - h / 2,
+            width: w,
+            height: h
+        )
     }
 
     func applicationTerminated(pid: pid_t, name: String) {
@@ -1717,9 +1817,91 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Display Change
 
     @objc private func displayConfigChanged(_ notification: Notification) {
-        panelessLog("Display configuration changed, retiling")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.retile()
+        panelessLog("Display configuration changed")
+        // Debounce: macOS fires several notifications in a burst during a display
+        // change. Wait for it to settle (and to finish relocating windows) before
+        // reconciling workspace state.
+        displayReconfigWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reconcileAfterDisplayChange() }
+        displayReconfigWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    /// Reconcile workspace state after a display is connected, disconnected, or the
+    /// main display changes. The core problem: workspace state is keyed by display ID,
+    /// so when a monitor disappears its windows are stranded under a dead key and macOS
+    /// dumps them onto the surviving display. Here we migrate those workspaces onto the
+    /// monitor we're actually using, merged by workspace number, then re-hide inactive
+    /// windows and retile.
+    private func reconcileAfterDisplayChange() {
+        let wsMgr = WorkspaceManager.shared
+        let liveIDs = Set(NSScreen.screens.map { wsMgr.screenID(for: $0) })
+        let knownIDs = Set(wsMgr.workspaces.keys).union(wsMgr.activeWorkspace.keys)
+        let orphanedIDs = knownIDs.subtracting(liveIDs)
+
+        guard !orphanedIDs.isEmpty else {
+            // No monitor was lost — just a resolution or arrangement change.
+            // Coordinate conversions recompute against the current primary, so a
+            // plain retile is enough.
+            retile()
+            return
+        }
+
+        panelessLog("Display(s) disconnected: \(orphanedIDs.sorted()). Migrating workspaces.")
+
+        observer.pause()
+        defer { observer.resume() }
+
+        // The live set belongs to whichever monitor we were last working on. If that
+        // monitor survived, keep using it; otherwise fall back to the new primary.
+        let oldLiveMonitor = liveMonitorID
+        let oldActive = wsMgr.activeWorkspace[oldLiveMonitor] ?? 1
+
+        let targetScreen: NSScreen
+        let targetID: String
+        if liveIDs.contains(oldLiveMonitor),
+           let survivor = NSScreen.screens.first(where: { wsMgr.screenID(for: $0) == oldLiveMonitor }) {
+            targetScreen = survivor
+            targetID = oldLiveMonitor
+        } else {
+            targetScreen = NSScreen.safeMain
+            targetID = wsMgr.screenID(for: targetScreen)
+        }
+        let screenFrame = screenFrameInAX(for: targetScreen)
+
+        // Fold the current live set back into its stored workspace so nothing is lost.
+        saveWorkspaceState(workspace: oldActive, monitor: oldLiveMonitor)
+
+        // Migrate every disconnected monitor's workspaces onto the target monitor.
+        for oldID in orphanedIDs where oldID != targetID {
+            wsMgr.migrateMonitor(from: oldID, to: targetID)
+            wsMgr.activeWorkspace.removeValue(forKey: oldID)
+        }
+        wsMgr.activeWorkspace[targetID] = oldActive
+
+        // macOS surfaced every relocated window onto the visible display. Re-hide the
+        // ones that belong to non-active workspaces before showing the active one.
+        rehideInactiveWorkspaces(activeMonitor: targetID, activeWorkspace: oldActive, screenFrame: screenFrame)
+
+        loadWorkspaceState(workspace: oldActive, monitor: targetID)
+        liveMonitorID = targetID
+        retile()
+        restoreFloatingWindowPositions()
+        onSpaceChange?()
+        WorkspacePersistence.save(debounced: false)
+        panelessLog("Reconciled displays: active workspace \(oldActive) on \(targetID)")
+    }
+
+    /// Park every window that belongs to an inactive workspace off-screen so it doesn't
+    /// linger on the visible display after a monitor change.
+    private func rehideInactiveWorkspaces(activeMonitor: String, activeWorkspace: Int, screenFrame: CGRect) {
+        let wsMgr = WorkspaceManager.shared
+        guard let monitorWorkspaces = wsMgr.workspaces[activeMonitor] else { return }
+        for (wsNum, ws) in monitorWorkspaces where wsNum != activeWorkspace {
+            for (wid, element) in ws.axElements {
+                guard !stickyWindows.contains(wid) else { continue }
+                wsMgr.hideWindow(wid, element: element, screenFrame: screenFrame)
+            }
         }
     }
 
@@ -2015,6 +2197,7 @@ class WindowManager: WindowObserverDelegate {
 
         let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
+        liveMonitorID = monitorID
 
         let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
         guard number != currentWS else {

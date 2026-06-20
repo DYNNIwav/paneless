@@ -121,6 +121,34 @@ class WorkspaceManager {
         return false
     }
 
+    /// Migrate all workspaces from a disconnected monitor onto a surviving monitor.
+    /// Merges by workspace number so windows that were on workspace N stay on workspace N.
+    /// The old monitor's state is removed afterwards.
+    func migrateMonitor(from oldID: String, to newID: String) {
+        guard oldID != newID, let orphanWorkspaces = workspaces[oldID] else {
+            workspaces.removeValue(forKey: oldID)
+            return
+        }
+
+        for (wsNum, orphanWS) in orphanWorkspaces {
+            if var existing = workspaces[newID]?[wsNum] {
+                // Merge window sets into the target monitor's same-numbered workspace
+                for wid in orphanWS.tiledWindows where !existing.tiledWindows.contains(wid) {
+                    existing.tiledWindows.append(wid)
+                }
+                existing.floatingWindows.formUnion(orphanWS.floatingWindows)
+                existing.fullscreenWindows.formUnion(orphanWS.fullscreenWindows)
+                for (wid, tracked) in orphanWS.trackedWindows { existing.trackedWindows[wid] = tracked }
+                for (wid, element) in orphanWS.axElements { existing.axElements[wid] = element }
+                workspaces[newID]?[wsNum] = existing
+            } else {
+                workspaces[newID, default: [:]][wsNum] = orphanWS
+            }
+        }
+
+        workspaces.removeValue(forKey: oldID)
+    }
+
     /// Find which workspace a window is on (for Cmd+Tab integration)
     func findWorkspace(for windowID: CGWindowID, on monitorID: String) -> Int? {
         guard let monitorWorkspaces = workspaces[monitorID] else { return nil }
