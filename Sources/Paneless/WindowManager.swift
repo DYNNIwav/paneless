@@ -63,6 +63,11 @@ class WindowManager: WindowObserverDelegate {
     // from macOS auto-activating the next app after the user closed the last window.
     private var lastWindowDestroyedAt: Date = .distantPast
 
+    // When we last switched workspaces. Right after a switch macOS briefly re-activates
+    // the app from the previous workspace; without this guard focus-follows-app would
+    // summon that app onto the new workspace and hijack focus.
+    private var lastWorkspaceSwitchAt: Date = .distantPast
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -1205,6 +1210,12 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
+        // Don't summon right after a workspace switch — macOS momentarily re-activates
+        // the previous workspace's app, which would otherwise be pulled here and steal focus.
+        if Date().timeIntervalSince(lastWorkspaceSwitchAt) < 0.5 {
+            return
+        }
+
         // Search other workspaces for windows belonging to this app's PID and pull
         // them onto the current workspace so the user stays in context.
         guard let monitorWorkspaces = WorkspaceManager.shared.workspaces[monitorID] else { return }
@@ -2254,6 +2265,7 @@ class WindowManager: WindowObserverDelegate {
         }
 
         onSpaceChange?()
+        lastWorkspaceSwitchAt = Date()
         panelessLog("Switched to workspace \(number) on \(monitorID)")
     }
 
