@@ -2110,12 +2110,64 @@ class WindowManager: WindowObserverDelegate {
     ///   0.0 = normal, negative = darker, positive = brighter.
     /// Compositor-level — follows window shape, rounded corners, shadow perfectly.
 
+    // MARK: - Dim ramp
+
+    private var dimFrom: [CGWindowID: Float] = [:]
+    private var dimTo: [CGWindowID: Float] = [:]
+    private var dimTimer: DispatchSourceTimer?
+    private var dimStart: CFTimeInterval = 0
+    private let dimDuration: CFTimeInterval = 0.18
+
+    /// Ease brightness to a new level instead of switching it.
+    ///
+    /// Worth doing because, unlike geometry and alpha, window brightness genuinely does
+    /// apply to windows owned by other processes: measured, a -0.6 offset changed 100%
+    /// of the pixels in the target window. So this is one of the few visual effects we
+    /// can drive on someone else's window, and it costs one call for the whole list.
+    private func rampBrightness(_ levels: [CGWindowID: Float]) {
+        guard !levels.isEmpty else { return }
+        let conn = CGSMainConnectionID()
+        for (wid, target) in levels {
+            dimFrom[wid] = dimTo[wid] ?? dimFrom[wid] ?? 0
+            dimTo[wid] = target
+        }
+        dimStart = CACurrentMediaTime()
+
+        dimTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(8))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let t = min((CACurrentMediaTime() - self.dimStart) / self.dimDuration, 1.0)
+            // Smoothstep, not ease-out. Ease-out puts most of the change in the first
+            // few milliseconds, which for brightness reads as a snap with a tail rather
+            // than a fade: measured -11.45 in one frame and then a decaying remainder.
+            let e = Float(t * t * (3 - 2 * t))
+            var wids: [CGWindowID] = []
+            var values: [Float] = []
+            for (wid, to) in self.dimTo {
+                let from = self.dimFrom[wid] ?? 0
+                wids.append(wid)
+                values.append(t >= 1.0 ? to : from + (to - from) * e)
+            }
+            if !wids.isEmpty {
+                CGSSetWindowListBrightness(conn, &wids, &values, Int32(wids.count))
+            }
+            if t >= 1.0 {
+                self.dimFrom = self.dimTo
+                self.dimTimer?.cancel()
+                self.dimTimer = nil
+            }
+        }
+        dimTimer = timer
+        timer.resume()
+    }
+
     private func updateDimming(layouts: [(CGWindowID, CGRect)]? = nil) {
         let dimAmount = config.dimUnfocused
         guard dimAmount > 0 else { restoreAllDimming(); return }
 
         let focusedID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
-        let conn = CGSMainConnectionID()
         let tiledSet = Set(layoutEngine.tiledWindows)
         let offset = -Float(dimAmount)  // e.g. dim=0.3 → offset=-0.3 (darker)
 
@@ -2128,9 +2180,7 @@ class WindowManager: WindowObserverDelegate {
             }
         }
         if !toRestore.isEmpty {
-            var wids = toRestore
-            var values = [Float](repeating: 0.0, count: toRestore.count)
-            CGSSetWindowListBrightness(conn, &wids, &values, Int32(toRestore.count))
+            rampBrightness(Dictionary(uniqueKeysWithValues: toRestore.map { ($0, Float(0)) }))
         }
 
         // Dim unfocused tiled windows
@@ -2138,9 +2188,7 @@ class WindowManager: WindowObserverDelegate {
         for wid in layoutEngine.tiledWindows {
             if wid == focusedID {
                 if dimmedWindows.contains(wid) {
-                    var wids: [CGWindowID] = [wid]
-                    var values: [Float] = [0.0]
-                    CGSSetWindowListBrightness(conn, &wids, &values, 1)
+                    rampBrightness([wid: 0.0])
                     dimmedWindows.remove(wid)
                 }
                 continue
@@ -2150,9 +2198,7 @@ class WindowManager: WindowObserverDelegate {
         }
 
         if !toDim.isEmpty {
-            var wids = toDim
-            var values = [Float](repeating: offset, count: toDim.count)
-            CGSSetWindowListBrightness(conn, &wids, &values, Int32(toDim.count))
+            rampBrightness(Dictionary(uniqueKeysWithValues: toDim.map { ($0, offset) }))
         }
     }
 

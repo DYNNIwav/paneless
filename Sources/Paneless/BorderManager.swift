@@ -18,22 +18,38 @@ class BorderManager {
             return
         }
 
-        // Remove old active border
-        activeBorder?.orderOut(nil)
-        activeBorder = nil
-
-        // Demote previously focused to inactive
-        if let prevID = currentFocusedID, prevID != windowID {
-            // We don't track inactive borders per-window to keep it simple
-            // Only the active border is shown (like Hyprland default)
-        }
-
         currentFocusedID = windowID
 
-        guard let windowID = windowID, let frame = frame else { return }
+        guard let windowID = windowID, let frame = frame else {
+            activeBorder?.orderOut(nil)
+            activeBorder = nil
+            return
+        }
 
-        activeBorder = makeBorderWindow(frame: frame, color: config.activeColor)
-        activeBorder?.order(.below, relativeTo: Int(windowID))
+        // Slide the existing border to the newly focused window rather than destroying
+        // it and building another. The border is one of the few things on screen we own
+        // outright, so unlike a real window it can be animated freely and always looks
+        // smooth no matter how slow the app underneath is.
+        if let border = activeBorder {
+            let cocoa = axToCocoaFrame(borderRect(for: frame))
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                border.animator().setFrame(cocoa, display: true)
+            }
+            border.order(.below, relativeTo: Int(windowID))
+            return
+        }
+
+        // No border yet: fade the first one in instead of snapping it on.
+        let created = makeBorderWindow(frame: frame, color: config.activeColor)
+        created.alphaValue = 0
+        activeBorder = created
+        created.order(.below, relativeTo: Int(windowID))
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            created.animator().alphaValue = 1
+        }
     }
 
     /// Update border positions after a retile (windows may have moved)
@@ -46,7 +62,14 @@ class BorderManager {
             if let border = activeBorder {
                 let borderFrame = borderRect(for: layout.1)
                 let cocoaFrame = axToCocoaFrame(borderFrame)
-                border.setFrame(cocoaFrame, display: true)
+                // Arrive a little before the window does. Moving the eye to where
+                // something is about to happen makes the motion that follows read as
+                // smoother than it measures, and the border can always keep the pace.
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.26
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    border.animator().setFrame(cocoaFrame, display: true)
+                }
                 border.order(.below, relativeTo: Int(focusedID))
             } else {
                 activeBorder = makeBorderWindow(frame: layout.1, color: config.activeColor)
