@@ -359,8 +359,10 @@ class WindowManager: WindowObserverDelegate {
         guard layoutEngine.tiledWindows.count >= 2 else { return }
 
         if config.niriMode {
-            // In Niri mode, J/K navigates up/down within the active column
-            niriFocusVertical(forward ? 1 : -1)
+            // Same keys, different job per mode, which is how focus_next already works.
+            // In niri this reorders the strip: moving focus within a column became
+            // pointless once focus stepping started entering columns by itself.
+            niriMoveColumn(right: forward)
             return
         }
 
