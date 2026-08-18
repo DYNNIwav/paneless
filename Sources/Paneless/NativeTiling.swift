@@ -248,6 +248,7 @@ enum NativeTiling {
         defaultColumnWidth: CGFloat,
         sideBySide: Bool = false,
         scrollOffset: CGFloat = 0,
+        singleColumnFull: Bool = false,
         resultingScrollOffset: inout CGFloat
     ) -> [NiriColumnResult] {
         guard !columns.isEmpty else { return [] }
@@ -255,9 +256,13 @@ enum NativeTiling {
         let halfGap = gap / 2
         let clampedActive = max(0, min(activeColumn, columns.count - 1))
 
+        // A single column can have the whole screen: a lone window at a third of the
+        // width, with wallpaper either side, is not a layout anyone wants.
+        let effectiveDefaultWidth = (singleColumnFull && columns.count == 1) ? 1.0 : defaultColumnWidth
+
         // Compute each column's width in pixels
         let colWidths: [CGFloat] = columns.map { col in
-            let fraction = col.widthOverride ?? defaultColumnWidth
+            let fraction = (singleColumnFull && columns.count == 1) ? 1.0 : (col.widthOverride ?? effectiveDefaultWidth)
             return region.width * fraction
         }
 
