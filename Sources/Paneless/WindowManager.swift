@@ -1421,7 +1421,10 @@ class WindowManager: WindowObserverDelegate {
     private func cycleLayout() {
         if config.niriMode {
             // Cycle column width presets: 1.0 → 0.5 → 0.333
-            let presets: [CGFloat] = [1.0, 0.5, 1.0/3.0]
+            // The same three niri cycles: a third, a half, two thirds. Full width is
+            // deliberately not among them, since a strip with one column visible is not
+            // a strip.
+            let presets: [CGFloat] = [1.0/3.0, 0.5, 2.0/3.0]
             let current = config.niriColumnWidth
             // Find the next preset after the current width
             let nextIdx = presets.firstIndex(where: { abs($0 - current) < 0.01 }).map { ($0 + 1) % presets.count } ?? 0

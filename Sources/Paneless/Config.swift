@@ -40,7 +40,9 @@ struct PanelessConfig {
     // Tiling mode: "hyprland" (default) or "niri" (scrolling columns)
     var tilingMode: String = "hyprland"
     var niriMode: Bool { tilingMode == "niri" }
-    var niriColumnWidth: CGFloat = 1.0
+    /// Fraction of the screen a column takes. niri's own default is 0.5; a full-width
+    /// default means only one window is ever visible, which defeats the point of a strip.
+    var niriColumnWidth: CGFloat = 0.5
     /// How windows consumed into the same column are arranged inside it.
     /// "vertical" stacks them one above the other, which is what niri itself does.
     /// "horizontal" puts them side by side, which suits a wide screen better.
