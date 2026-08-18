@@ -2558,19 +2558,33 @@ class WindowManager: WindowObserverDelegate {
 
     /// Restore floating and fullscreen windows to their saved positions after workspace switch.
     /// Tiled windows are handled by retile(); this handles non-tiled windows.
+    /// Put floating and fullscreen windows back where they were.
+    ///
+    /// Their remembered frame is whatever they were sitting at when the workspace was
+    /// last saved, and that is read live, so a window parked off-screen at that moment
+    /// has the parking corner recorded as its home. Restoring it then puts it straight
+    /// back off-screen, every time, and it never returns: that is how a floating window
+    /// ends up permanently invisible. Refuse a remembered position that is off-screen
+    /// and centre the window instead.
     private func restoreFloatingWindowPositions() {
-        for wid in floatingWindows {
+        let screen = NSScreen.safeMain
+        let screenFrame = screenFrameInAX(for: screen)
+
+        func place(_ wid: CGWindowID) {
             guard let element = axElements[wid],
                   let tracked = trackedWindows[wid],
-                  tracked.frame != .zero else { continue }
-            AccessibilityBridge.setFrame(of: element, to: tracked.frame)
+                  tracked.frame != .zero else { return }
+            var frame = tracked.frame
+            if WorkspaceManager.shared.isHiddenPosition(screenFrame: screenFrame, windowFrame: frame)
+                || !AccessibilityBridge.isPlausibleFrame(frame) {
+                frame = centeredFrame(for: frame.size, in: screenFrame)
+                trackedWindows[wid]?.frame = frame
+            }
+            AccessibilityBridge.setFrame(of: element, to: frame)
         }
-        for wid in fullscreenWindows {
-            guard let element = axElements[wid],
-                  let tracked = trackedWindows[wid],
-                  tracked.frame != .zero else { continue }
-            AccessibilityBridge.setFrame(of: element, to: tracked.frame)
-        }
+
+        for wid in floatingWindows { place(wid) }
+        for wid in fullscreenWindows { place(wid) }
     }
 
     private func loadWorkspaceState(workspace: Int, monitor: String) {
