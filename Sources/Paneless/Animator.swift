@@ -43,6 +43,19 @@ class Animator: NSObject {
 
 
     // Hyprland default durations & scale
+    /// Slight swing past the target, then settle. The overshoot is deliberately small:
+    /// enough to read as weight, not enough to lap a neighbouring cell.
+    private func easeOutBack(_ x: CGFloat) -> CGFloat {
+        // Measured: c1 = 0.9 swung 57px past the target on a 1904pt window, enough to
+        // lap the neighbouring cell. This is about a third of that.
+        let c1: CGFloat = 0.32, c3 = c1 + 1
+        let p = x - 1
+        return 1 + c3 * p * p * p + c1 * p * p
+    }
+
+    /// How far apart to start successive windows in one reflow.
+    private let staggerStep: TimeInterval = 0.025
+
     /// Matches what macOS's own tiling takes (measured 330ms for TextEdit, 355ms for Safari).
     private let windowMoveDuration: CFTimeInterval = 0.33
 
@@ -126,7 +139,13 @@ class Animator: NSObject {
             var pid: pid_t = 0
             AXUIElementGetPid(t.element, &pid)
             pids.insert(pid)
-            steps.append(Glide(windowID: t.windowID, element: t.element, from: from, to: t.targetFrame))
+            // A new arrival leads and may swing past its mark; the others follow in a
+            // short cascade, which reads as choreography rather than everything lurching
+            // at once. Both are free: it only changes when each write is issued.
+            steps.append(Glide(windowID: t.windowID, element: t.element,
+                               from: from, to: t.targetFrame,
+                               delay: t.isNewWindow ? 0 : Double(steps.count + 1) * staggerStep,
+                               overshoot: t.isNewWindow))
         }
 
         guard !steps.isEmpty else {
@@ -153,8 +172,19 @@ class Animator: NSObject {
         var sizeRefused = false
         /// Whether the first write has been checked against what the app actually did.
         var constraintChecked = false
+        /// Seconds to wait before this window starts moving. Offsetting each window a
+        /// little makes a reflow read as choreographed rather than mechanical, and it
+        /// costs nothing: the writes are simply spread out.
+        var delay: TimeInterval = 0
+        /// Whether this window may swing slightly past its target and settle back.
+        /// Only new arrivals do; a neighbour overshooting would lap into the window
+        /// beside it, which in a tiling layout reads as a mistake rather than as life.
+        var overshoot = false
 
-        init(windowID: CGWindowID, element: AXUIElement, from: CGRect, to: CGRect) {
+        init(windowID: CGWindowID, element: AXUIElement, from: CGRect, to: CGRect,
+             delay: TimeInterval = 0, overshoot: Bool = false) {
+            self.delay = delay
+            self.overshoot = overshoot
             self.windowID = windowID
             self.element = element
             self.from = from
@@ -280,14 +310,18 @@ class Animator: NSObject {
 
         guard !steps.isEmpty else { return }
 
-        let linear = min(CGFloat((CACurrentMediaTime() - started) / windowMoveDuration), 1.0)
-        if linear >= 1.0 {
+        let elapsed = CACurrentMediaTime() - started
+        let lastDelay = steps.map(\.delay).max() ?? 0
+        if elapsed >= windowMoveDuration + lastDelay {
             DispatchQueue.main.async { [weak self] in self?.finishGlide(commit: true) }
             return
         }
 
-        let e = easeOut.evaluate(linear)
         for g in steps {
+            // Each window runs its own clock, offset by its place in the reflow.
+            let own = min(max((elapsed - g.delay) / windowMoveDuration, 0), 1)
+            guard own > 0 else { continue }
+            let e = g.overshoot ? easeOutBack(CGFloat(own)) : easeOut.evaluate(CGFloat(own))
             // Skip any window still busy with its previous write. A slow app then simply
             // updates less often instead of backing up a queue of stale frames.
             glideLock.lock()
@@ -393,7 +427,13 @@ class Animator: NSObject {
             var pid: pid_t = 0
             AXUIElementGetPid(t.element, &pid)
             pids.insert(pid)
-            steps.append(Glide(windowID: t.windowID, element: t.element, from: from, to: t.targetFrame))
+            // A new arrival leads and may swing past its mark; the others follow in a
+            // short cascade, which reads as choreography rather than everything lurching
+            // at once. Both are free: it only changes when each write is issued.
+            steps.append(Glide(windowID: t.windowID, element: t.element,
+                               from: from, to: t.targetFrame,
+                               delay: t.isNewWindow ? 0 : Double(steps.count + 1) * staggerStep,
+                               overshoot: t.isNewWindow))
         }
 
         guard !steps.isEmpty else {
