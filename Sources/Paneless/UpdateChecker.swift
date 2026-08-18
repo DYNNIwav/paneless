@@ -63,6 +63,31 @@ final class UpdateChecker {
         return false
     }
 
-    /// What the user should actually run, since brew owns the install.
+    /// What the user should actually run, when brew owns the install.
     var upgradeCommand: String { "brew upgrade --cask paneless" }
+
+    /// How this copy of Paneless got here, which decides what we may offer to do
+    /// about an update.
+    enum InstallSource {
+        /// Homebrew owns it, so we must not replace the app ourselves: brew would go on
+        /// believing the old version is installed.
+        case homebrew
+        /// Downloaded and dragged in, so nothing else is tracking it and pointing at a
+        /// download is the whole job.
+        case direct
+    }
+
+    var installSource: InstallSource {
+        // A cask leaves its own directory behind, on either Homebrew prefix.
+        for prefix in ["/opt/homebrew", "/usr/local"] {
+            if FileManager.default.fileExists(atPath: "\(prefix)/Caskroom/paneless") {
+                return .homebrew
+            }
+        }
+        return .direct
+    }
+
+    var downloadURL: URL? {
+        URL(string: "https://github.com/\(repo)/releases/latest")
+    }
 }

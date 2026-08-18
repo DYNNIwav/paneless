@@ -195,21 +195,35 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         let checker = UpdateChecker.shared
         let alert = NSAlert()
         alert.messageText = "Paneless \(checker.availableVersion ?? "") is available"
-        alert.informativeText = "You have \(checker.currentVersion). Paneless is installed with Homebrew, "
-            + "so update it there rather than replacing the app, which would leave Homebrew "
-            + "believing an older version is installed:\n\n\(checker.upgradeCommand)"
-        alert.addButton(withTitle: "Copy Command")
-        alert.addButton(withTitle: "Release Notes")
-        alert.addButton(withTitle: "Later")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(checker.upgradeCommand, forType: .string)
-        case .alertSecondButtonReturn:
-            if let url = URL(string: "https://github.com/DYNNIwav/paneless/releases/latest") {
+
+        switch checker.installSource {
+        case .homebrew:
+            // Homebrew is tracking this install, so replacing the app here would leave
+            // it out of step. Hand over the command instead.
+            alert.informativeText = "You have \(checker.currentVersion). This copy was installed "
+                + "with Homebrew, which keeps track of the version, so update it there:"
+                + "\n\n\(checker.upgradeCommand)"
+            alert.addButton(withTitle: "Copy Command")
+            alert.addButton(withTitle: "Release Notes")
+            alert.addButton(withTitle: "Later")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(checker.upgradeCommand, forType: .string)
+            case .alertSecondButtonReturn:
+                if let url = checker.downloadURL { NSWorkspace.shared.open(url) }
+            default: break
+            }
+
+        case .direct:
+            // Nothing else is tracking this copy, so a download link is the whole answer.
+            alert.informativeText = "You have \(checker.currentVersion). Download the new "
+                + "version and replace Paneless in your Applications folder."
+            alert.addButton(withTitle: "Download")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn, let url = checker.downloadURL {
                 NSWorkspace.shared.open(url)
             }
-        default: break
         }
     }
 
