@@ -78,6 +78,18 @@ class WindowManager: WindowObserverDelegate {
     /// New windows parked off-screen, due to be walked in from the edge of their own cell.
     private var revealPending: Set<CGWindowID> = []
 
+    /// Where a parked window sat before we moved it, so it can be put back if it turns
+    /// out not to be tiled after all.
+    private var parkedOriginals: [CGWindowID: CGRect] = [:]
+
+    /// Undo the pre-emptive park for a window we are not going to tile.
+    private func unparkIfNeeded(_ windowID: CGWindowID) {
+        guard let original = parkedOriginals.removeValue(forKey: windowID),
+              let element = axElements[windowID] else { return }
+        revealPending.remove(windowID)
+        AccessibilityBridge.setFrameDuringAnimation(of: element, to: original)
+    }
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -723,6 +735,7 @@ class WindowManager: WindowObserverDelegate {
                 // Only fall back to the centred popin when the window has no readable
                 // frame yet, where there is nothing to glide from.
                 if revealPending.remove(w.windowID) != nil {
+                    parkedOriginals.removeValue(forKey: w.windowID)
                     // Parked off-screen and already the right size. Step it in from the
                     // edge nearest its own cell, derived from THIS target, so it always
                     // arrives at the place it was travelling toward.
@@ -921,6 +934,10 @@ class WindowManager: WindowObserverDelegate {
         // watching it sit wherever the app happened to put it. That wait is the ghost.
         if config.revealWhenReady, let element = axElements[windowID],
            let current = AccessibilityBridge.getFrame(of: element) {
+            // Remember where the app put it. Parking happens before we know whether this
+            // window will be tiled at all, and a window that turns out to be floating
+            // must not be left out there: that stranded System Settings off-screen.
+            parkedOriginals[windowID] = current
             let parked = WorkspaceManager.shared.calculateHiddenPosition(
                 screenFrame: screenFrameInAX(for: NSScreen.safeMain), originalSize: current.size)
             AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
@@ -1054,6 +1071,7 @@ class WindowManager: WindowObserverDelegate {
         }
 
         if shouldFloat {
+            unparkIfNeeded(windowID)
             floatingWindows.insert(windowID)
             restoreWindowAlpha(windowID)
         } else if axElements[windowID] != nil {
@@ -1116,6 +1134,7 @@ class WindowManager: WindowObserverDelegate {
 
         panelessLog("Window destroyed: \(windowID)")
         revealPending.remove(windowID)
+        parkedOriginals.removeValue(forKey: windowID)
         lastWindowDestroyedAt = Date()
 
         // Last known rect of the window that is going away, so focus can follow the
