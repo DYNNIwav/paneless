@@ -1,4 +1,5 @@
 import Cocoa
+import CoreVideo
 
 /// Window animation engine.
 ///
@@ -39,6 +40,8 @@ class Animator: NSObject {
     private let windowOpenDuration: CFTimeInterval = 0.5     // popin 80%
     private let windowCloseDuration: CFTimeInterval = 0.2     // popout 80%
     private let popinScale: CGFloat = 0.80                    // Hyprland default: popin 80%
+    /// Matches what macOS's own tiling takes (measured 330ms for TextEdit, 355ms for Safari).
+    private let windowMoveDuration: CFTimeInterval = 0.33
 
     struct Transition {
         let windowID: CGWindowID
@@ -89,55 +92,157 @@ class Animator: NSObject {
     /// New windows get a GPU-composited popin scale + fade-in after a short
     /// delay to let existing windows finish resizing first (avoids overlap
     /// with slow apps like Messages).
+    /// Move windows to their target positions.
+    ///
+    /// Every window walks from its current frame to its target over `windowMoveDuration`,
+    /// paced by the display link. This is the same thing macOS's own tiling does: measured
+    /// on this machine, Apple animates the real window frame at roughly 115 updates/sec for
+    /// a light window and 73/sec for Safari. There is no compositor shortcut available to
+    /// us, because SLSSetWindowTransform and CGSSetWindowAlpha both no-op on windows owned
+    /// by another process, so the frame is the only thing that actually moves.
     func animate(_ transitions: [Transition]) {
         cancelAll()
         guard !transitions.isEmpty else { return }
 
-        var newWindows: [Transition] = []
-        var frames: [(element: AXUIElement, frame: CGRect)] = []
+        let targets = transitions.map { (element: $0.element, frame: $0.targetFrame) }
 
+        guard enabled else {
+            AccessibilityBridge.batchSetFrames(targets)
+            return
+        }
+
+        var steps: [Glide] = []
+        var pids = Set<pid_t>()
         for t in transitions {
-            frames.append((element: t.element, frame: t.targetFrame))
-            if t.isNewWindow {
-                newWindows.append(t)
-            }
+            let from = t.startFrame.width > 1 ? t.startFrame
+                                              : (AccessibilityBridge.getFrame(of: t.element) ?? t.targetFrame)
+            // Nothing to watch if it is already there.
+            guard abs(from.origin.x - t.targetFrame.origin.x) > 1
+                || abs(from.origin.y - t.targetFrame.origin.y) > 1
+                || abs(from.width - t.targetFrame.width) > 1
+                || abs(from.height - t.targetFrame.height) > 1 else { continue }
+            var pid: pid_t = 0
+            AXUIElementGetPid(t.element, &pid)
+            pids.insert(pid)
+            steps.append(Glide(windowID: t.windowID, element: t.element, from: from, to: t.targetFrame))
         }
 
-        // Atomic batch move: reposition existing windows + place new window hidden
-        SLSDisableUpdate(conn)
-
-        for w in newWindows {
-            CGSSetWindowAlpha(conn, w.windowID, 0.0)
+        guard !steps.isEmpty else {
+            AccessibilityBridge.batchSetFrames(targets)
+            return
         }
 
-        // Apply initial scale transform so new window is ready at 80% when it fades in
-        if enabled && hasGPUTransform {
-            for w in newWindows {
-                let tx = w.targetFrame.width * (1.0 - popinScale) / 2.0
-                let ty = w.targetFrame.height * (1.0 - popinScale) / 2.0
-                SLSSetWindowTransform(conn, w.windowID,
-                    CGAffineTransform(a: popinScale, b: 0, c: 0, d: popinScale, tx: tx, ty: ty))
-            }
+        startGlide(steps, targets: targets, pids: pids)
+    }
+
+    // MARK: - Frame Glide
+
+    struct Glide {
+        let windowID: CGWindowID
+        let element: AXUIElement
+        let from: CGRect
+        let to: CGRect
+    }
+
+    private var glides: [Glide] = []
+    private var glideTargets: [(element: AXUIElement, frame: CGRect)] = []
+    private var glideStartTime: CFTimeInterval = 0
+    private var restoreEnhancedUI: Set<pid_t> = []
+    private var displayLink: CVDisplayLink?
+    private let glideLock = NSLock()
+    private var busyWindows = Set<CGWindowID>()
+    /// Concurrent so a slow app blocks only its own window, not the whole frame.
+    /// Each app is a separate AX server, so these genuinely overlap.
+    private let axQueue = DispatchQueue(label: "com.paneless.axglide", attributes: .concurrent)
+
+    private func startGlide(_ steps: [Glide],
+                            targets: [(element: AXUIElement, frame: CGRect)],
+                            pids: Set<pid_t>) {
+        glideLock.lock()
+        glides = steps
+        glideTargets = targets
+        glideStartTime = CACurrentMediaTime()
+        busyWindows.removeAll()
+        glideLock.unlock()
+
+        // Off for the duration, so the apps don't animate against us.
+        restoreEnhancedUI = AccessibilityBridge.setEnhancedUI(pids: pids, enabled: false)
+        isAnimating = true
+
+        var link: CVDisplayLink?
+        guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess, let link = link else {
+            AccessibilityBridge.batchSetFrames(targets)
+            finishGlide()
+            return
+        }
+        CVDisplayLinkSetOutputHandler(link) { [weak self] _, _, _, _, _ in
+            self?.glideTick()
+            return kCVReturnSuccess
+        }
+        displayLink = link
+        CVDisplayLinkStart(link)
+    }
+
+    private func glideTick() {
+        glideLock.lock()
+        let steps = glides
+        let started = glideStartTime
+        glideLock.unlock()
+
+        guard !steps.isEmpty else { return }
+
+        let linear = min(CGFloat((CACurrentMediaTime() - started) / windowMoveDuration), 1.0)
+        if linear >= 1.0 {
+            DispatchQueue.main.async { [weak self] in self?.finishGlide(commit: true) }
+            return
         }
 
-        AccessibilityBridge.batchSetFrames(frames)
+        let e = easeOut.evaluate(linear)
+        for g in steps {
+            // Skip any window still busy with its previous write. A slow app then simply
+            // updates less often instead of backing up a queue of stale frames.
+            glideLock.lock()
+            let busy = busyWindows.contains(g.windowID)
+            if !busy { busyWindows.insert(g.windowID) }
+            glideLock.unlock()
+            guard !busy else { continue }
 
-        SLSReenableUpdate(conn)
-
-        // Start popin after a delay so slow apps have time to resize
-        if enabled && hasGPUTransform && !newWindows.isEmpty {
-            let work = DispatchWorkItem { [weak self] in
+            let rect = CGRect(
+                x: g.from.origin.x + (g.to.origin.x - g.from.origin.x) * e,
+                y: g.from.origin.y + (g.to.origin.y - g.from.origin.y) * e,
+                width: g.from.width + (g.to.width - g.from.width) * e,
+                height: g.from.height + (g.to.height - g.from.height) * e
+            )
+            axQueue.async { [weak self] in
+                AccessibilityBridge.setFrameDuringAnimation(of: g.element, to: rect)
                 guard let self = self else { return }
-                self.activeTransitions = newWindows
-                self.startTimer(duration: self.windowOpenDuration, tick: self.tickPopin)
-            }
-            pendingPopinWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
-        } else if !newWindows.isEmpty {
-            for w in newWindows {
-                CGSSetWindowAlpha(conn, w.windowID, 1.0)
+                self.glideLock.lock()
+                self.busyWindows.remove(g.windowID)
+                self.glideLock.unlock()
             }
         }
+    }
+
+    private func finishGlide(commit: Bool = false) {
+        if let link = displayLink {
+            CVDisplayLinkStop(link)
+            displayLink = nil
+        }
+        let targets = glideTargets
+        if commit && !targets.isEmpty {
+            // Land exactly on the target, whatever the last interpolated frame was.
+            AccessibilityBridge.batchSetFrames(targets)
+        }
+        if !restoreEnhancedUI.isEmpty {
+            AccessibilityBridge.setEnhancedUI(pids: restoreEnhancedUI, enabled: true)
+            restoreEnhancedUI = []
+        }
+        glideLock.lock()
+        glides = []
+        glideTargets = []
+        busyWindows.removeAll()
+        glideLock.unlock()
+        isAnimating = false
     }
 
     /// Snap remaining windows to new positions + animate closing window
@@ -282,6 +387,12 @@ class Animator: NSObject {
         // Cancel pending delayed popin
         pendingPopinWork?.cancel()
         pendingPopinWork = nil
+
+        // Stop any frame glide. Don't commit: whoever cancelled is about to set
+        // its own targets, and committing here would fight them.
+        if displayLink != nil || !glides.isEmpty {
+            finishGlide()
+        }
 
         if isAnimating {
             if hasGPUTransform {

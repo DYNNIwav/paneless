@@ -81,6 +81,41 @@ enum AccessibilityBridge {
         }
     }
 
+    /// Lean frame set for use inside an animation. Skips the AXEnhancedUserInterface
+    /// dance that `setFrame` does per call, because that costs two extra IPC round
+    /// trips to the app every time. Toggle it once around the whole animation with
+    /// `setEnhancedUI` instead. Safe to call off the main thread.
+    static func setFrameDuringAnimation(of element: AXUIElement, to rect: CGRect) {
+        var size = rect.size
+        var position = rect.origin
+        if let sizeValue = AXValueCreate(.cgSize, &size) {
+            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+        }
+        if let posValue = AXValueCreate(.cgPoint, &position) {
+            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
+        }
+    }
+
+    /// Turn AXEnhancedUserInterface off (or back on) for a set of apps. Off stops the
+    /// app running its own animation on top of ours, which is what makes windows drift.
+    /// Returns the pids that actually had it enabled, so they can be restored.
+    @discardableResult
+    static func setEnhancedUI(pids: Set<pid_t>, enabled: Bool) -> Set<pid_t> {
+        var changed = Set<pid_t>()
+        for pid in pids where pid != 0 {
+            let appRef = AXUIElementCreateApplication(pid)
+            var value: AnyObject?
+            let has = AXUIElementCopyAttributeValue(appRef, "AXEnhancedUserInterface" as CFString, &value) == .success
+            let current = has ? ((value as? Bool) ?? false) : false
+            if current != enabled {
+                AXUIElementSetAttributeValue(appRef, "AXEnhancedUserInterface" as CFString,
+                                             enabled ? kCFBooleanTrue : kCFBooleanFalse)
+                changed.insert(pid)
+            }
+        }
+        return changed
+    }
+
     /// Batch set frames for multiple windows. Disables AXEnhancedUserInterface once per app
     /// instead of once per window, reducing IPC overhead significantly.
     static func batchSetFrames(_ frames: [(element: AXUIElement, frame: CGRect)]) {
