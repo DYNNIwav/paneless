@@ -56,6 +56,11 @@ class Animator: NSObject {
     /// How far apart to start successive windows in one reflow.
     private let staggerStep: TimeInterval = 0.025
 
+    /// How long a new window waits before entering. The windows already on screen move
+    /// aside first and the newcomer drops into the space they opened, rather than the
+    /// two crossing over each other at the start, which reads as a collision.
+    private let newWindowDelay: TimeInterval = 0.10
+
     /// Matches what macOS's own tiling takes (measured 330ms for TextEdit, 355ms for Safari).
     private let windowMoveDuration: CFTimeInterval = 0.33
 
@@ -144,7 +149,7 @@ class Animator: NSObject {
             // at once. Both are free: it only changes when each write is issued.
             steps.append(Glide(windowID: t.windowID, element: t.element,
                                from: from, to: t.targetFrame,
-                               delay: t.isNewWindow ? 0 : Double(steps.count + 1) * staggerStep,
+                               delay: t.isNewWindow ? newWindowDelay : Double(steps.count) * staggerStep,
                                overshoot: t.isNewWindow))
         }
 
@@ -432,7 +437,7 @@ class Animator: NSObject {
             // at once. Both are free: it only changes when each write is issued.
             steps.append(Glide(windowID: t.windowID, element: t.element,
                                from: from, to: t.targetFrame,
-                               delay: t.isNewWindow ? 0 : Double(steps.count + 1) * staggerStep,
+                               delay: t.isNewWindow ? newWindowDelay : Double(steps.count) * staggerStep,
                                overshoot: t.isNewWindow))
         }
 

@@ -133,7 +133,6 @@ class WindowObserver {
         // If already running, just extend the duration
         if interceptorTimer != nil { return }
 
-        let conn = CGSMainConnectionID()
         let myPID = ProcessInfo.processInfo.processIdentifier
         let endTime = CACurrentMediaTime() + duration
 
@@ -169,10 +168,19 @@ class WindowObserver {
 
                 if ownerPID == myPID { continue }
 
-                // New window we haven't seen — hide it immediately
+                // New window we haven't seen. This loop runs every 8ms on a high
+                // priority thread, so it knows about the window long before the ordinary
+                // poll does. It used to only call CGSSetWindowAlpha, which does nothing
+                // at all to a window owned by another process, so all that head start
+                // was thrown away and the window sat visible where the app put it for a
+                // further 200ms. Tell the manager at once instead.
                 if !known.contains(windowID) && !hidden.contains(windowID) {
-                    CGSSetWindowAlpha(conn, windowID, 0.0)
                     hidden.insert(windowID)
+                    let name = info[kCGWindowOwnerName as String] as? String ?? "Unknown"
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, !self.isPaused else { return }
+                        self.delegate?.windowCreated(windowID: windowID, pid: ownerPID, appName: name)
+                    }
                 }
             }
 

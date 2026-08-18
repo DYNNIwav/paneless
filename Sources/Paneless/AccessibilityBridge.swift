@@ -207,6 +207,26 @@ enum AccessibilityBridge {
 
     // MARK: - Window Enumeration
 
+    /// Find one window's AX element without building the app's whole window list.
+    ///
+    /// `kAXWindows` makes the app enumerate everything it has, and until we hold an
+    /// element we cannot move the window, so that wait is time a brand new window spends
+    /// sitting visibly wherever the app put it. A window that has just opened is almost
+    /// always the focused one, so try that single attribute first and only fall back to
+    /// the full list if it is something else.
+    static func windowElement(for windowID: CGWindowID, pid: pid_t) -> AXUIElement? {
+        let appRef = AXUIElementCreateApplication(pid)
+        var focused: AnyObject?
+        if AXUIElementCopyAttributeValue(appRef, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+           let element = focused {
+            var wid: CGWindowID = 0
+            if _AXUIElementGetWindow(element as! AXUIElement, &wid) == .success, wid == windowID {
+                return (element as! AXUIElement)
+            }
+        }
+        return getWindows(for: pid).first(where: { $0.1 == windowID })?.0
+    }
+
     static func getWindows(for pid: pid_t) -> [(AXUIElement, CGWindowID)] {
         let appRef = AXUIElementCreateApplication(pid)
         var windowsValue: AnyObject?

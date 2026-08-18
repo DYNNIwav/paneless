@@ -658,14 +658,12 @@ class WindowManager: WindowObserverDelegate {
     /// `animate` for the reveal, which cancelled the first mid-flight and left the
     /// neighbours stranded at interpolated positions, overlapping each other.
     private func parkThenReveal(_ windowID: CGWindowID, element: AXUIElement) {
-        let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
         guard let current = AccessibilityBridge.getFrame(of: element) else {
             retileWithScaleIn(newWindowID: windowID); return
         }
 
-        let parked = WorkspaceManager.shared.calculateHiddenPosition(
-            screenFrame: screenFrame, originalSize: current.size)
-        AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
+        // Already parked, back when the window was first seen.
+        let parked = current
 
         // Size it off-screen to whatever cell it is heading for, so the expensive
         // relayout is paid out of sight. Where it ENTERS from is decided later, by the
@@ -915,11 +913,17 @@ class WindowManager: WindowObserverDelegate {
         )
         trackedWindows[windowID] = tracked
 
-        for (element, wid) in AccessibilityBridge.getWindows(for: pid) {
-            if wid == windowID {
-                axElements[windowID] = element
-                break
-            }
+        axElements[windowID] = AccessibilityBridge.windowElement(for: windowID, pid: pid)
+
+        // Park it the moment we can address it, before any of the classification below.
+        // Everything after this point costs AX round trips to an app that may be slow,
+        // measured at about 161ms, and until the window is out of sight the user is
+        // watching it sit wherever the app happened to put it. That wait is the ghost.
+        if config.revealWhenReady, let element = axElements[windowID],
+           let current = AccessibilityBridge.getFrame(of: element) {
+            let parked = WorkspaceManager.shared.calculateHiddenPosition(
+                screenFrame: screenFrameInAX(for: NSScreen.safeMain), originalSize: current.size)
+            AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
         }
 
         // Auto-float dialogs and small windows
