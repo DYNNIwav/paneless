@@ -386,6 +386,15 @@ private func axObserverCallback(
             windowObserver.delegate?.axElementDestroyed(element: element)
         }
 
+        // A new window is often not in CGWindowList yet when this notification lands,
+        // so the single poll below misses it and detection falls to the next ordinary
+        // tick, up to 500ms later. Measured: 190ms before Paneless even saw a new Mail
+        // window. Burst-poll instead so we catch it within one 50ms tick. Only fires
+        // for real window creation, not for every destroyed menu or popover.
+        if notifName == kAXWindowCreatedNotification as String {
+            windowObserver.startBurstPolling(duration: 1.0)
+        }
+
         windowObserver.triggerPoll()
     }
 }
