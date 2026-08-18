@@ -1486,7 +1486,8 @@ class WindowManager: WindowObserverDelegate {
             region: region,
             gap: config.innerGap,
             activeColumn: layoutEngine.niriActiveColumn,
-            defaultColumnWidth: config.niriColumnWidth
+            defaultColumnWidth: config.niriColumnWidth,
+            sideBySide: config.niriColumnStack == "horizontal"
         )
 
         // Position off-screen windows at their strip locations (keeps positions correct for scroll animation)
@@ -1539,7 +1540,8 @@ class WindowManager: WindowObserverDelegate {
             region: region,
             gap: config.innerGap,
             activeColumn: layoutEngine.niriActiveColumn,
-            defaultColumnWidth: config.niriColumnWidth
+            defaultColumnWidth: config.niriColumnWidth,
+            sideBySide: config.niriColumnStack == "horizontal"
         )
 
         niriUpdateVisibility(results)
@@ -1612,7 +1614,8 @@ class WindowManager: WindowObserverDelegate {
             region: region,
             gap: config.innerGap,
             activeColumn: col,
-            defaultColumnWidth: config.niriColumnWidth
+            defaultColumnWidth: config.niriColumnWidth,
+            sideBySide: config.niriColumnStack == "horizontal"
         )
 
         // Atomically restore alpha for windows about to become visible

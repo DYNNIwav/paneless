@@ -245,7 +245,8 @@ enum NativeTiling {
         region: TilingRegion,
         gap: CGFloat,
         activeColumn: Int,
-        defaultColumnWidth: CGFloat
+        defaultColumnWidth: CGFloat,
+        sideBySide: Bool = false
     ) -> [NiriColumnResult] {
         guard !columns.isEmpty else { return [] }
 
@@ -291,17 +292,32 @@ enum NativeTiling {
             var windowFrames: [(windowID: CGWindowID, frame: CGRect)] = []
 
             if windowCount > 0 {
-                let totalHeight = region.height
-                let windowHeight = totalHeight / CGFloat(windowCount)
-
-                for (wi, wid) in col.windows.enumerated() {
-                    let frame = CGRect(
-                        x: colX + halfGap,
-                        y: region.y + windowHeight * CGFloat(wi) + halfGap,
-                        width: max(colW - gap, 100),
-                        height: max(windowHeight - gap, 100)
-                    )
-                    windowFrames.append((windowID: wid, frame: frame))
+                // Windows sharing a column sit one above the other by default, as they
+                // do in niri. Side by side is offered because on a wide screen a column
+                // is short and broad, so splitting its height twice leaves two letterbox
+                // strips, while splitting its width gives two usable panes.
+                if sideBySide {
+                    let windowWidth = colW / CGFloat(windowCount)
+                    for (wi, wid) in col.windows.enumerated() {
+                        let frame = CGRect(
+                            x: colX + windowWidth * CGFloat(wi) + halfGap,
+                            y: region.y + halfGap,
+                            width: max(windowWidth - gap, 100),
+                            height: max(region.height - gap, 100)
+                        )
+                        windowFrames.append((windowID: wid, frame: frame))
+                    }
+                } else {
+                    let windowHeight = region.height / CGFloat(windowCount)
+                    for (wi, wid) in col.windows.enumerated() {
+                        let frame = CGRect(
+                            x: colX + halfGap,
+                            y: region.y + windowHeight * CGFloat(wi) + halfGap,
+                            width: max(colW - gap, 100),
+                            height: max(windowHeight - gap, 100)
+                        )
+                        windowFrames.append((windowID: wid, frame: frame))
+                    }
                 }
             }
 

@@ -41,6 +41,10 @@ struct PanelessConfig {
     var tilingMode: String = "hyprland"
     var niriMode: Bool { tilingMode == "niri" }
     var niriColumnWidth: CGFloat = 1.0
+    /// How windows consumed into the same column are arranged inside it.
+    /// "vertical" stacks them one above the other, which is what niri itself does.
+    /// "horizontal" puts them side by side, which suits a wide screen better.
+    var niriColumnStack: String = "vertical"
 
     // Focus follows app (auto-switch workspace when an app on another workspace is activated)
     var focusFollowsApp: Bool = true
@@ -215,6 +219,9 @@ struct PanelessConfig {
                 case "tiling_mode":
                     let mode = value.lowercased()
                     if mode == "niri" || mode == "hyprland" { config.tilingMode = mode }
+                case "niri_column_stack":
+                    let st = value.lowercased()
+                    if st == "vertical" || st == "horizontal" { config.niriColumnStack = st }
                 case "niri_column_width": config.niriColumnWidth = max(0.1, min(3.0, CGFloat(Double(value) ?? 1.0)))
                 case "focus_follows_app": config.focusFollowsApp = value != "false" && value != "0"
                 case "hyperkey":
@@ -498,6 +505,7 @@ struct PanelessConfig {
         lines.append("tiling_mode = \(tilingMode)")
         if tilingMode == "niri" {
             lines.append("niri_column_width = \(niriColumnWidth)")
+            lines.append("niri_column_stack = \(niriColumnStack)")
         }
         if let code = hyperkeyCode, let name = KeyNames.keyName(for: code) {
             lines.append("hyperkey = \(name)")
