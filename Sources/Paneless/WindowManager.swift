@@ -75,21 +75,6 @@ class WindowManager: WindowObserverDelegate {
     private let summonSettleDelay: TimeInterval = 0.3
     private var pendingSummon: DispatchWorkItem?
 
-    /// New windows parked off-screen, due to be walked in from the edge of their own cell.
-    private var revealPending: Set<CGWindowID> = []
-
-    /// Where a parked window sat before we moved it, so it can be put back if it turns
-    /// out not to be tiled after all.
-    private var parkedOriginals: [CGWindowID: CGRect] = [:]
-
-    /// Undo the pre-emptive park for a window we are not going to tile.
-    private func unparkIfNeeded(_ windowID: CGWindowID) {
-        guard let original = parkedOriginals.removeValue(forKey: windowID),
-              let element = axElements[windowID] else { return }
-        revealPending.remove(windowID)
-        AccessibilityBridge.setFrameDuringAnimation(of: element, to: original)
-    }
-
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -659,46 +644,6 @@ class WindowManager: WindowObserverDelegate {
 
     /// Retile with a scale-in effect for a newly created window.
     /// Avoids redundant AX getFrame calls by using calculated start frames directly.
-    /// Get a new window out of sight, let it resize there, then bring the layout in
-    /// with a single animation.
-    ///
-    /// The costly half of placing a new window is the app re-laying its content out at a
-    /// size it has never had, up to 53ms a call on a heavy app, and that is what looked
-    /// like lag. A window cannot be hidden, but it can be moved for 0.2-2ms, so the
-    /// resize happens off-screen and only the arrival is seen.
-    ///
-    /// Everything happens in ONE animation pass. An earlier attempt ran a second
-    /// `animate` for the reveal, which cancelled the first mid-flight and left the
-    /// neighbours stranded at interpolated positions, overlapping each other.
-    private func parkThenReveal(_ windowID: CGWindowID, element: AXUIElement) {
-        guard let current = AccessibilityBridge.getFrame(of: element) else {
-            retileWithScaleIn(newWindowID: windowID); return
-        }
-
-        // Already parked, back when the window was first seen.
-        let parked = current
-
-        // Size it off-screen to whatever cell it is heading for, so the expensive
-        // relayout is paid out of sight. Where it ENTERS from is decided later, by the
-        // same code that decides where it lands, because working that out twice is how
-        // a window ended up flying toward one cell and settling in another.
-        let windows = layoutEngine.tiledWindows
-        let frames = NativeTiling.calculateFrames(
-            count: windows.count, region: getTilingRegion(), gap: config.innerGap,
-            singleWindowPadding: config.singleWindowPadding,
-            splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant)
-        if let idx = windows.firstIndex(of: windowID), idx < frames.count {
-            AccessibilityBridge.setFrameDuringAnimation(
-                of: element, to: CGRect(origin: parked.origin, size: frames[idx].size))
-        }
-
-        revealPending.insert(windowID)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            guard let self = self, self.trackedWindows[windowID] != nil else { return }
-            self.retileWithScaleIn(newWindowID: windowID)
-        }
-    }
-
     private func retileWithScaleIn(newWindowID: CGWindowID) {
         if config.niriMode {
             retileNiriWithScaleIn(newWindowID: newWindowID)
@@ -735,19 +680,7 @@ class WindowManager: WindowObserverDelegate {
                 //
                 // Only fall back to the centred popin when the window has no readable
                 // frame yet, where there is nothing to glide from.
-                if revealPending.remove(w.windowID) != nil {
-                    parkedOriginals.removeValue(forKey: w.windowID)
-                    // Parked off-screen and already the right size. Step it in from the
-                    // edge nearest its own cell, derived from THIS target, so it always
-                    // arrives at the place it was travelling toward.
-                    let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
-                    let fromLeft = target.midX < screenFrame.midX
-                    let entry = CGRect(
-                        x: fromLeft ? screenFrame.minX - target.width : screenFrame.maxX,
-                        y: target.origin.y, width: target.width, height: target.height)
-                    AccessibilityBridge.setFrameDuringAnimation(of: w.element, to: entry, setSize: false)
-                    startFrame = entry
-                } else if let actual = AccessibilityBridge.getFrame(of: w.element),
+                if let actual = AccessibilityBridge.getFrame(of: w.element),
                    AccessibilityBridge.isPlausibleFrame(actual) {
                     startFrame = actual
                 } else {
@@ -933,31 +866,6 @@ class WindowManager: WindowObserverDelegate {
         // Everything after this point costs AX round trips to an app that may be slow,
         // measured at about 161ms, and until the window is out of sight the user is
         // watching it sit wherever the app happened to put it. That wait is the ghost.
-        // Only get it out of sight if it opened somewhere we would not want it seen.
-        //
-        // Apps restore their last window frame, and that frame is one Paneless set, so a
-        // window very often opens already inside the tiling area: measured, Notes opens
-        // 19px from its target. Parking such a window sends a correctly placed window
-        // off-screen and walks it back, which is the very disturbance the parking exists
-        // to prevent. Leave those alone and let them settle in place.
-        let alreadyWellPlaced: Bool = {
-            guard let element = axElements[windowID],
-                  let f = AccessibilityBridge.getFrame(of: element) else { return false }
-            let region = getTilingRegion().cgRect
-            return region.contains(CGPoint(x: f.midX, y: f.midY))
-        }()
-
-        if config.revealWhenReady, !alreadyWellPlaced, let element = axElements[windowID],
-           let current = AccessibilityBridge.getFrame(of: element) {
-            // Remember where the app put it. Parking happens before we know whether this
-            // window will be tiled at all, and a window that turns out to be floating
-            // must not be left out there: that stranded System Settings off-screen.
-            parkedOriginals[windowID] = current
-            let parked = WorkspaceManager.shared.calculateHiddenPosition(
-                screenFrame: screenFrameInAX(for: NSScreen.safeMain), originalSize: current.size)
-            AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
-        }
-
         // Auto-float dialogs and small windows
         if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
             if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
@@ -1086,7 +994,6 @@ class WindowManager: WindowObserverDelegate {
         }
 
         if shouldFloat {
-            unparkIfNeeded(windowID)
             floatingWindows.insert(windowID)
             restoreWindowAlpha(windowID)
         } else if axElements[windowID] != nil {
@@ -1125,11 +1032,7 @@ class WindowManager: WindowObserverDelegate {
             let conn = CGSMainConnectionID()
             CGSSetWindowAlpha(conn, windowID, 0.0)
 
-            if config.revealWhenReady, let element = axElements[windowID] {
-                parkThenReveal(windowID, element: element)
-            } else {
-                retileWithScaleIn(newWindowID: windowID)
-            }
+            retileWithScaleIn(newWindowID: windowID)
         } else {
             trackedWindows.removeValue(forKey: windowID)
             restoreWindowAlpha(windowID)
@@ -1148,8 +1051,6 @@ class WindowManager: WindowObserverDelegate {
         guard trackedWindows[windowID] != nil else { return }
 
         panelessLog("Window destroyed: \(windowID)")
-        revealPending.remove(windowID)
-        parkedOriginals.removeValue(forKey: windowID)
         lastWindowDestroyedAt = Date()
 
         // Last known rect of the window that is going away, so focus can follow the

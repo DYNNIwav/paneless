@@ -33,11 +33,6 @@ struct PanelessConfig {
     /// a single IPC round trip. The animation is then AppKit's spring rather than our
     /// bezier, and position animates while size still snaps.
     var appDrivenAnimation: Bool = false
-    /// Park a brand new window off-screen, let the app lay itself out at its final size
-    /// out of sight, then bring the whole layout in with one animation. A window cannot
-    /// be hidden, since the alpha pre-hide does nothing to another process's window, but
-    /// it can be moved, and a position write is 0.2-2ms against up to 53ms for a resize.
-    var revealWhenReady: Bool = false
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false
@@ -216,7 +211,6 @@ struct PanelessConfig {
                 case "animations": config.animations = value != "false" && value != "0"
                 case "size_once": config.sizeOnce = value == "true" || value == "1"
                 case "app_driven_animation": config.appDrivenAnimation = value == "true" || value == "1"
-                case "reveal_when_ready": config.revealWhenReady = value == "true" || value == "1"
                 case "force_promotion": config.forceProMotion = value == "true" || value == "1"
                 case "tiling_mode":
                     let mode = value.lowercased()
@@ -494,7 +488,6 @@ struct PanelessConfig {
         lines.append("animations = \(animations)")
         lines.append("size_once = \(sizeOnce)")
         lines.append("app_driven_animation = \(appDrivenAnimation)")
-        lines.append("reveal_when_ready = \(revealWhenReady)")
         lines.append("native_animation = \(nativeAnimation)")
         lines.append("single_window_padding = \(Int(singleWindowPadding))")
         lines.append("focus_follows_mouse = \(focusFollowsMouse)")
