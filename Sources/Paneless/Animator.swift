@@ -23,6 +23,8 @@ class Animator: NSObject {
     /// Take the final size in one step at the start and animate position only.
     /// See Config.sizeOnce.
     var sizeOnce: Bool = false
+    /// See Config.appDrivenAnimation.
+    var appDrivenAnimation: Bool = false
 
     /// Called with true when an animation starts and false when the last one ends.
     /// Lets the owner run the ProMotion keepalive only while it is worth anything.
@@ -132,7 +134,7 @@ class Animator: NSObject {
             return
         }
 
-        startGlide(steps, targets: targets, pids: pids)
+        startAnimation(steps, targets: targets, pids: pids)
     }
 
     // MARK: - Frame Glide
@@ -171,6 +173,60 @@ class Animator: NSObject {
     /// Concurrent so a slow app blocks only its own window, not the whole frame.
     /// Each app is a separate AX server, so these genuinely overlap.
     private let axQueue = DispatchQueue(label: "com.paneless.axglide", attributes: .concurrent)
+
+    private func startAnimation(_ steps: [Glide],
+                                targets: [(element: AXUIElement, frame: CGRect)],
+                                pids: Set<pid_t>) {
+        if appDrivenAnimation {
+            startAppDrivenAnimation(steps, pids: pids)
+        } else {
+            startGlide(steps, targets: targets, pids: pids)
+        }
+    }
+
+    // MARK: - App-driven animation
+
+    /// How long to leave AXEnhancedUserInterface on. The apps' own animation measured
+    /// ~225ms; this leaves margin without holding the attribute a moment longer than
+    /// needed, since it makes apps build and maintain their whole accessibility tree.
+    private let appDrivenSettle: TimeInterval = 0.45
+    private var appDrivenRestore: Set<pid_t> = []
+    private var appDrivenWork: DispatchWorkItem?
+
+    /// Give each app its destination once and let it animate itself.
+    ///
+    /// Every other window manager turns AXEnhancedUserInterface off before writing a
+    /// frame, because windows then "keep animating" and a read-back mid-flight returns
+    /// a value that is still moving, which breaks their verify-and-correct loops. We
+    /// want the animation, so we turn it on instead. Measured on Ghostty and Safari:
+    /// one write produces 22-27 frames over ~225ms, about 110fps, from a single IPC
+    /// round trip rather than one per frame.
+    ///
+    /// What it does not do is animate size: of 56 observed changes only 2 were resizes.
+    /// Position eases, size snaps.
+    private func startAppDrivenAnimation(_ steps: [Glide], pids: Set<pid_t>) {
+        appDrivenWork?.cancel()
+        // Only restore the apps we actually changed, so an app that legitimately has
+        // this on, with VoiceOver running for instance, is left alone.
+        appDrivenRestore.formUnion(AccessibilityBridge.setEnhancedUI(pids: pids, enabled: true))
+        isAnimating = true
+        onAnimationActive?(true)
+
+        for step in steps {
+            AccessibilityBridge.setFrameDuringAnimation(of: step.element, to: step.to)
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            AccessibilityBridge.setEnhancedUI(pids: self.appDrivenRestore, enabled: false)
+            self.appDrivenRestore = []
+            self.appDrivenWork = nil
+            self.isAnimating = false
+            self.onAnimationActive?(false)
+        }
+        appDrivenWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + appDrivenSettle, execute: work)
+    }
 
     private func startGlide(_ steps: [Glide],
                             targets: [(element: AXUIElement, frame: CGRect)],
@@ -344,12 +400,22 @@ class Animator: NSObject {
             AccessibilityBridge.batchSetFrames(targets)
             return
         }
-        startGlide(steps, targets: targets, pids: pids)
+        startAnimation(steps, targets: targets, pids: pids)
     }
 
     // MARK: - Cleanup
 
     func cancelAll() {
+        // Let an app-driven animation finish its restore rather than stranding the
+        // attribute on; a queued restore is cheap and leaving it set is not.
+        if let work = appDrivenWork {
+            work.cancel()
+            appDrivenWork = nil
+            AccessibilityBridge.setEnhancedUI(pids: appDrivenRestore, enabled: false)
+            appDrivenRestore = []
+            isAnimating = false
+        }
+
         // Stop any frame glide. Don't commit: whoever cancelled is about to set
         // its own targets, and committing here would fight them.
         if displayLink != nil || !glides.isEmpty {

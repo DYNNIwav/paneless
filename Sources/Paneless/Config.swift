@@ -27,6 +27,12 @@ struct PanelessConfig {
     /// Safari against 0.2-2ms for a move, so this trades a size that snaps at the start
     /// for motion that stays smooth. rift ships this behaviour by default.
     var sizeOnce: Bool = false
+    /// Hand each app its destination once and let it animate itself, instead of driving
+    /// the frames ourselves. Measured: with AXEnhancedUserInterface set, one AX write
+    /// makes the app produce 22-27 frames over ~225ms on its own, Safari included, for
+    /// a single IPC round trip. The animation is then AppKit's spring rather than our
+    /// bezier, and position animates while size still snaps.
+    var appDrivenAnimation: Bool = false
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false
@@ -204,6 +210,7 @@ struct PanelessConfig {
                 case "native_animation": config.nativeAnimation = value == "true" || value == "1"
                 case "animations": config.animations = value != "false" && value != "0"
                 case "size_once": config.sizeOnce = value == "true" || value == "1"
+                case "app_driven_animation": config.appDrivenAnimation = value == "true" || value == "1"
                 case "force_promotion": config.forceProMotion = value == "true" || value == "1"
                 case "tiling_mode":
                     let mode = value.lowercased()
@@ -480,6 +487,7 @@ struct PanelessConfig {
         lines.append("outer_gap = \(Int(outerGap))")
         lines.append("animations = \(animations)")
         lines.append("size_once = \(sizeOnce)")
+        lines.append("app_driven_animation = \(appDrivenAnimation)")
         lines.append("native_animation = \(nativeAnimation)")
         lines.append("single_window_padding = \(Int(singleWindowPadding))")
         lines.append("focus_follows_mouse = \(focusFollowsMouse)")
