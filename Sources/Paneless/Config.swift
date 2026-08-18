@@ -47,11 +47,13 @@ struct PanelessConfig {
     /// "vertical" stacks them one above the other, which is what niri itself does.
     /// "horizontal" puts them side by side, which suits a wide screen better.
     var niriColumnStack: String = "vertical"
-    /// Let the only column on a workspace fill the screen instead of sitting at its
-    /// configured fraction with wallpaper on either side. niri does not do this and
-    /// expects you to maximize by hand, but a lone window showing a third of the screen
-    /// is hard to defend. The cost is one resize when a second window arrives.
-    var niriSingleColumnFull: Bool = true
+    /// Widen columns to fill the screen while they still fit, rather than leaving
+    /// wallpaper beside them. One column takes the whole width, two take half each,
+    /// three take a third, and from there the configured width applies and the strip
+    /// begins to scroll. niri keeps the width fixed and expects you to maximize by hand,
+    /// but empty space next to two windows on a wide screen is hard to defend. The cost
+    /// is a resize each time the count crosses one of those thresholds.
+    var niriFillScreen: Bool = true
 
     // Focus follows app (auto-switch workspace when an app on another workspace is activated)
     var focusFollowsApp: Bool = true
@@ -226,7 +228,7 @@ struct PanelessConfig {
                 case "tiling_mode":
                     let mode = value.lowercased()
                     if mode == "niri" || mode == "hyprland" { config.tilingMode = mode }
-                case "niri_single_column_full": config.niriSingleColumnFull = value != "false" && value != "0"
+                case "niri_fill_screen": config.niriFillScreen = value != "false" && value != "0"
                 case "niri_column_stack":
                     let st = value.lowercased()
                     if st == "vertical" || st == "horizontal" { config.niriColumnStack = st }
@@ -518,7 +520,7 @@ struct PanelessConfig {
         if tilingMode == "niri" {
             lines.append("niri_column_width = \(niriColumnWidth)")
             lines.append("niri_column_stack = \(niriColumnStack)")
-            lines.append("niri_single_column_full = \(niriSingleColumnFull)")
+            lines.append("niri_fill_screen = \(niriFillScreen)")
         }
         if let code = hyperkeyCode, let name = KeyNames.keyName(for: code) {
             lines.append("hyperkey = \(name)")

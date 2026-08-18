@@ -1500,7 +1500,7 @@ class WindowManager: WindowObserverDelegate {
             defaultColumnWidth: config.niriColumnWidth,
             sideBySide: config.niriColumnStack == "horizontal",
             scrollOffset: layoutEngine.niriScrollOffset,
-            singleColumnFull: config.niriSingleColumnFull,
+            fillScreen: config.niriFillScreen,
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 
@@ -1557,7 +1557,7 @@ class WindowManager: WindowObserverDelegate {
             defaultColumnWidth: config.niriColumnWidth,
             sideBySide: config.niriColumnStack == "horizontal",
             scrollOffset: layoutEngine.niriScrollOffset,
-            singleColumnFull: config.niriSingleColumnFull,
+            fillScreen: config.niriFillScreen,
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 
@@ -1664,7 +1664,7 @@ class WindowManager: WindowObserverDelegate {
             defaultColumnWidth: config.niriColumnWidth,
             sideBySide: config.niriColumnStack == "horizontal",
             scrollOffset: layoutEngine.niriScrollOffset,
-            singleColumnFull: config.niriSingleColumnFull,
+            fillScreen: config.niriFillScreen,
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 

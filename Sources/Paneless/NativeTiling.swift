@@ -248,7 +248,7 @@ enum NativeTiling {
         defaultColumnWidth: CGFloat,
         sideBySide: Bool = false,
         scrollOffset: CGFloat = 0,
-        singleColumnFull: Bool = false,
+        fillScreen: Bool = false,
         resultingScrollOffset: inout CGFloat
     ) -> [NiriColumnResult] {
         guard !columns.isEmpty else { return [] }
@@ -256,13 +256,18 @@ enum NativeTiling {
         let halfGap = gap / 2
         let clampedActive = max(0, min(activeColumn, columns.count - 1))
 
-        // A single column can have the whole screen: a lone window at a third of the
-        // width, with wallpaper either side, is not a layout anyone wants.
-        let effectiveDefaultWidth = (singleColumnFull && columns.count == 1) ? 1.0 : defaultColumnWidth
+        // Widen columns while they still fit. Two windows on a wide screen should share
+        // it rather than sit at a third each with wallpaper between them, and the same
+        // reasoning that gives a lone window the whole screen gives two windows a half.
+        // Past the point where they fill the screen the configured width applies and the
+        // strip starts to scroll.
+        let fitWidth = 1.0 / CGFloat(max(columns.count, 1))
+        let effectiveDefaultWidth = fillScreen ? max(defaultColumnWidth, min(fitWidth, 1.0))
+                                               : defaultColumnWidth
 
         // Compute each column's width in pixels
         let colWidths: [CGFloat] = columns.map { col in
-            let fraction = (singleColumnFull && columns.count == 1) ? 1.0 : (col.widthOverride ?? effectiveDefaultWidth)
+            let fraction = col.widthOverride ?? effectiveDefaultWidth
             return region.width * fraction
         }
 
