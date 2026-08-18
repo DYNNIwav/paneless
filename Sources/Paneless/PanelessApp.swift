@@ -186,6 +186,31 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         rebuildMenu()
+
+        // Once a day at most, and never in the way of anything.
+        UpdateChecker.shared.checkIfDue { [weak self] in self?.rebuildMenu() }
+    }
+
+    @objc private func showUpdate(_ sender: Any?) {
+        let checker = UpdateChecker.shared
+        let alert = NSAlert()
+        alert.messageText = "Paneless \(checker.availableVersion ?? "") is available"
+        alert.informativeText = "You have \(checker.currentVersion). Paneless is installed with Homebrew, "
+            + "so update it there rather than replacing the app, which would leave Homebrew "
+            + "believing an older version is installed:\n\n\(checker.upgradeCommand)"
+        alert.addButton(withTitle: "Copy Command")
+        alert.addButton(withTitle: "Release Notes")
+        alert.addButton(withTitle: "Later")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(checker.upgradeCommand, forType: .string)
+        case .alertSecondButtonReturn:
+            if let url = URL(string: "https://github.com/DYNNIwav/paneless/releases/latest") {
+                NSWorkspace.shared.open(url)
+            }
+        default: break
+        }
     }
 
     private func rebuildMenu() {
@@ -201,6 +226,14 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             let permItem = NSMenuItem(title: "Grant Accessibility Permission...", action: #selector(openAccessibilitySettings(_:)), keyEquivalent: "")
             permItem.target = self
             menu.addItem(permItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        if let newVersion = UpdateChecker.shared.availableVersion {
+            let item = NSMenuItem(title: "Update available: \(newVersion)",
+                                  action: #selector(showUpdate(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
             menu.addItem(NSMenuItem.separator())
         }
 

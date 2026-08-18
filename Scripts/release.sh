@@ -11,6 +11,16 @@ TAP_REPO="/tmp/homebrew-paneless"
 
 cd "$(dirname "$0")/.."
 
+# Stamp the version into the bundle before building.
+#
+# This used to be hardcoded in Resources/Info.plist and only the cask was updated,
+# so every build shipped claiming 1.3.0 whatever it was tagged. Anything that reads
+# the bundle version, About Paneless and the update check among them, was wrong.
+NUM="${VERSION#v}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NUM" Resources/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NUM" Resources/Info.plist
+echo "==> Version stamped as $NUM"
+
 echo "==> Building..."
 swift build -c release 2>&1
 ./Scripts/build.sh
