@@ -246,7 +246,9 @@ enum NativeTiling {
         gap: CGFloat,
         activeColumn: Int,
         defaultColumnWidth: CGFloat,
-        sideBySide: Bool = false
+        sideBySide: Bool = false,
+        scrollOffset: CGFloat = 0,
+        resultingScrollOffset: inout CGFloat
     ) -> [NiriColumnResult] {
         guard !columns.isEmpty else { return [] }
 
@@ -267,14 +269,28 @@ enum NativeTiling {
             x += w
         }
 
-        // Find the center of the active column in the strip
+        // Scroll only as far as needed to bring the active column into view, keeping
+        // whatever position the strip already had otherwise.
+        //
+        // Centring the active column on every change is what made this feel unlike niri:
+        // merging two columns or moving focus slid the entire strip, so it looked as
+        // though every other window flew across the screen rather than the one window
+        // you moved going anywhere. niri leaves the view alone while the focused column
+        // is already visible.
         let activeX = colXPositions[clampedActive]
         let activeW = colWidths[clampedActive]
-        let activeCenterInStrip = activeX + activeW / 2
 
-        // Offset so the active column center aligns with the screen center
-        let screenCenterX = region.x + region.width / 2
-        let offset = screenCenterX - activeCenterInStrip
+        var offset = scrollOffset
+        let leftEdge = activeX + offset
+        let rightEdge = leftEdge + activeW
+        if leftEdge < region.x {
+            offset += region.x - leftEdge
+        } else if rightEdge > region.x + region.width {
+            offset -= rightEdge - (region.x + region.width)
+        }
+        // Never scroll past the start of the strip.
+        offset = min(offset, region.x)
+        resultingScrollOffset = offset
 
         // Build results
         var results: [NiriColumnResult] = []

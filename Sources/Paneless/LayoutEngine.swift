@@ -11,6 +11,9 @@ class LayoutEngine {
     // Niri mode state
     var niriActiveColumn: Int = 0
     var niriColumns: [NiriColumn] = []
+    /// Where the strip is scrolled to. Kept between layouts so the view only moves
+    /// when the focused column would otherwise be off-screen.
+    var niriScrollOffset: CGFloat = 0
 
     init(config: PanelessConfig) {
         self.config = config
