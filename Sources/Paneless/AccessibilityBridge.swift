@@ -44,6 +44,7 @@ enum AccessibilityBridge {
     }
 
     static func setFrame(of element: AXUIElement, to rect: CGRect) {
+        guard isPlausibleFrame(rect) else { return }
         // Disable AXEnhancedUserInterface to prevent app-side animations.
         // Same workaround used by Amethyst/Silica and yabai.
         var pid: pid_t = 0
@@ -81,11 +82,37 @@ enum AccessibilityBridge {
         }
     }
 
+    /// Whether a frame is safe to hand to another application.
+    ///
+    /// Not defensive programming for its own sake. On 18 August 2026 this machine
+    /// kernel panicked: a window was given an absurd geometry, the window server tried
+    /// to allocate a 111848100 x 1544 Metal surface, failed, crashed twice and stopped
+    /// checking in, and the kernel watchdog rebooted the machine after 121 seconds.
+    /// Frames are computed 120 times a second and sent straight into other processes,
+    /// so one NaN or overflow is not a visual glitch, it is a lost session. This is the
+    /// single choke point every frame passes through, so the check belongs here.
+    static func isPlausibleFrame(_ r: CGRect) -> Bool {
+        guard r.origin.x.isFinite, r.origin.y.isFinite,
+              r.size.width.isFinite, r.size.height.isFinite else { return false }
+        guard r.width >= 1, r.height >= 1 else { return false }
+
+        let bounds = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+        let limit = bounds.isNull ? CGRect(x: 0, y: 0, width: 8000, height: 8000) : bounds
+        guard r.width <= limit.width * 4, r.height <= limit.height * 4 else { return false }
+
+        // A screen's worth of slack outside the desktop, since parking puts windows
+        // deliberately off-screen.
+        let slack = max(limit.width, limit.height)
+        return r.origin.x > limit.minX - slack && r.origin.x < limit.maxX + slack
+            && r.origin.y > limit.minY - slack && r.origin.y < limit.maxY + slack
+    }
+
     /// Lean frame set for use inside an animation. Skips the AXEnhancedUserInterface
     /// dance that `setFrame` does per call, because that costs two extra IPC round
     /// trips to the app every time. Toggle it once around the whole animation with
     /// `setEnhancedUI` instead. Safe to call off the main thread.
     static func setFrameDuringAnimation(of element: AXUIElement, to rect: CGRect) {
+        guard isPlausibleFrame(rect) else { return }
         var size = rect.size
         var position = rect.origin
         if let sizeValue = AXValueCreate(.cgSize, &size) {
@@ -118,7 +145,8 @@ enum AccessibilityBridge {
 
     /// Batch set frames for multiple windows. Disables AXEnhancedUserInterface once per app
     /// instead of once per window, reducing IPC overhead significantly.
-    static func batchSetFrames(_ frames: [(element: AXUIElement, frame: CGRect)]) {
+    static func batchSetFrames(_ rawFrames: [(element: AXUIElement, frame: CGRect)]) {
+        let frames = rawFrames.filter { isPlausibleFrame($0.frame) }
         guard !frames.isEmpty else { return }
 
         // Phase 1: Disable AXEnhancedUserInterface for all unique apps

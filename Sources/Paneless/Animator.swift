@@ -213,6 +213,11 @@ class Animator: NSObject {
                 width: g.from.width + (g.to.width - g.from.width) * e,
                 height: g.from.height + (g.to.height - g.from.height) * e
             )
+            guard AccessibilityBridge.isPlausibleFrame(rect) else {
+                glideLock.lock(); busyWindows.remove(g.windowID); glideLock.unlock()
+                continue
+            }
+
             axQueue.async { [weak self] in
                 AccessibilityBridge.setFrameDuringAnimation(of: g.element, to: rect)
                 guard let self = self else { return }

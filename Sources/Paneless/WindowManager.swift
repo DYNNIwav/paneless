@@ -687,6 +687,12 @@ class WindowManager: WindowObserverDelegate {
             ))
         }
 
+        if let t = transitions.first(where: { $0.isNewWindow }) {
+            panelessLog(String(format: "New window %d: scale-in %.0f,%.0f %.0fx%.0f -> %.0f,%.0f %.0fx%.0f",
+                t.windowID,
+                t.startFrame.origin.x, t.startFrame.origin.y, t.startFrame.width, t.startFrame.height,
+                t.targetFrame.origin.x, t.targetFrame.origin.y, t.targetFrame.width, t.targetFrame.height))
+        }
         Animator.shared.animate(transitions)
 
         let layouts = layoutEngine.calculateFrames(in: region)
@@ -809,6 +815,7 @@ class WindowManager: WindowObserverDelegate {
     }
 
     func windowCreated(windowID: CGWindowID, pid: pid_t, appName: String) {
+        panelessLog("New window \(windowID) (\(appName)) seen by Paneless")
         guard trackedWindows[windowID] == nil else {
             restoreWindowAlpha(windowID)
             return
@@ -888,6 +895,7 @@ class WindowManager: WindowObserverDelegate {
             let monitorID = WorkspaceManager.shared.screenID(for: screen)
             let currentWS = WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1
             if target != currentWS {
+                panelessLog("New window \(windowID) (\(appName)): app rule sends it to workspace \(target), parking it")
                 // Move directly to target workspace without showing on current
                 let screenFrame = screenFrameInAX(for: screen)
                 if let element = axElements[windowID] {
