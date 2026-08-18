@@ -211,6 +211,8 @@ class WindowManager: WindowObserverDelegate {
         case .setMark(let key):             setWindowMark(key)
         case .jumpToMark(let key):          jumpToWindowMark(key)
         case .niriConsume:                  niriConsume()
+        case .niriMoveLeft:                 niriMoveFocused(right: false)
+        case .niriMoveRight:                niriMoveFocused(right: true)
         case .niriExpel:                    niriExpel()
         }
     }
@@ -1741,6 +1743,53 @@ class WindowManager: WindowObserverDelegate {
     }
 
     /// Consume: take the first window from the right column and append to the current column.
+    /// Move the focused window one step sideways, merging or splitting as needed.
+    ///
+    /// This is niri's `consume-or-expel-window-left/right`, and it is what niri puts on
+    /// its easiest keys rather than the raw consume and expel pair. Those two operate on
+    /// the column: consume reaches out and pulls in a window you were not looking at, and
+    /// expel pushes your window away and drags your focus along with it. Correct, but
+    /// backwards to think about. This one is window-centric instead: the window you are
+    /// looking at goes left or right, joining the column on that side if it is alone, or
+    /// leaving its column if it is sharing one. Focus stays on it throughout.
+    private func niriMoveFocused(right: Bool) {
+        guard config.niriMode, let wid = focusedWindowID else { return }
+        guard let (ci, ri) = layoutEngine.findWindowInColumns(wid) else { return }
+
+        let sharing = layoutEngine.niriColumns[ci].windows.count > 1
+        layoutEngine.niriColumns[ci].windows.remove(at: ri)
+
+        if sharing {
+            // Leave the column and stand alone next to it.
+            layoutEngine.niriColumns[ci].focusedIndex = min(ri, layoutEngine.niriColumns[ci].windows.count - 1)
+            let at = right ? ci + 1 : ci
+            let col = NiriColumn(windows: [wid], widthOverride: layoutEngine.niriColumns[ci].widthOverride)
+            layoutEngine.niriColumns.insert(col, at: at)
+            layoutEngine.niriActiveColumn = at
+        } else {
+            // Was alone: that column goes, and the window joins the one beside it.
+            layoutEngine.niriColumns.remove(at: ci)
+            let target = right ? ci : ci - 1
+            if target >= 0 && target < layoutEngine.niriColumns.count {
+                layoutEngine.niriColumns[target].windows.append(wid)
+                layoutEngine.niriColumns[target].focusedIndex = layoutEngine.niriColumns[target].windows.count - 1
+                layoutEngine.niriActiveColumn = target
+            } else {
+                // Nothing on that side, so put it back where it was.
+                let at = max(0, min(ci, layoutEngine.niriColumns.count))
+                layoutEngine.niriColumns.insert(NiriColumn(windows: [wid]), at: at)
+                layoutEngine.niriActiveColumn = at
+            }
+        }
+
+        layoutEngine.niriColumns.removeAll { $0.windows.isEmpty }
+        layoutEngine.syncTiledWindowsFromColumns()
+        focusedWindowID = wid
+        retileNiri()
+        onFocusChange?()
+        panelessLog("Niri move \(right ? "right" : "left"): window \(wid)")
+    }
+
     private func niriConsume() {
         guard config.niriMode else { return }
         let ci = layoutEngine.niriActiveColumn
