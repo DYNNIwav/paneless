@@ -1139,12 +1139,18 @@ class WindowManager: WindowObserverDelegate {
             CGSSetWindowListBrightness(CGSMainConnectionID(), &wids, &values, 1)
         }
 
-        // Remove from Niri columns (handles active column adjustment and tiledWindows sync)
+        // Ask whether this window was tiled BEFORE touching the columns.
+        //
+        // removeWindowFromColumns syncs the flat window list as a side effect, so asking
+        // afterwards always said no in niri mode. Everything below is gated on this
+        // answer, so in niri mode a closing window neither retiled nor moved focus: the
+        // column vanished but the ones after it kept their old positions, leaving a hole
+        // in the strip that stayed until something else forced a retile.
+        let wasTiled = layoutEngine.contains(windowID)
+
         if config.niriMode {
             layoutEngine.removeWindowFromColumns(windowID)
         }
-
-        let wasTiled = layoutEngine.contains(windowID)
         if wasTiled {
             layoutEngine.remove(windowID: windowID)
         }
