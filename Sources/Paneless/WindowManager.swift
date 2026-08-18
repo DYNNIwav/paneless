@@ -584,9 +584,9 @@ class WindowManager: WindowObserverDelegate {
 
     // MARK: - Tiling
 
-    func retile() {
+    func retile(animated: Bool = true) {
         if config.niriMode {
-            retileNiri()
+            retileNiri(animated: animated)
             return
         }
 
@@ -620,14 +620,16 @@ class WindowManager: WindowObserverDelegate {
                 NativeTiling.applyLayout(
                     windows: windows, region: region, gap: config.innerGap,
                     singleWindowPadding: config.singleWindowPadding,
-                    splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+                    splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant,
+                    animate: animated
                 )
             }
         } else {
             NativeTiling.applyLayout(
                 windows: windows, region: region, gap: config.innerGap,
                 singleWindowPadding: config.singleWindowPadding,
-                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
+                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant,
+                animate: animated
             )
         }
 
@@ -1432,7 +1434,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Niri Scrolling Column Mode
 
     /// Core Niri retile: calculate column frames, animate visible windows, hide off-screen ones.
-    private func retileNiri() {
+    private func retileNiri(animated: Bool = true) {
         let region = getTilingRegion()
         let results = NativeTiling.calculateNiriFrames(
             columns: layoutEngine.niriColumns,
@@ -1470,7 +1472,13 @@ class WindowManager: WindowObserverDelegate {
         }
 
         if !transitions.isEmpty {
-            Animator.shared.animate(transitions)
+            if animated {
+                Animator.shared.animate(transitions)
+            } else {
+                // Un-parking after a workspace switch: appear in place, don't fly in.
+                AccessibilityBridge.batchSetFrames(
+                    transitions.map { (element: $0.element, frame: $0.targetFrame) })
+            }
         }
 
         let visibleLayouts: [(CGWindowID, CGRect)] = results.filter { $0.isVisible }.flatMap { $0.windowFrames.map { ($0.windowID, $0.frame) } }
@@ -2291,7 +2299,9 @@ class WindowManager: WindowObserverDelegate {
             layoutEngine.layoutVariant = savedVariant
         }
 
-        retile()
+        // Un-parking, not a layout change: these windows are coming back from the
+        // hidden corner, so they must appear where they belong rather than fly in.
+        retile(animated: false)
 
         // Restore floating/fullscreen windows to their saved positions
         // (retile only handles tiled windows; floating windows need explicit restoration)
