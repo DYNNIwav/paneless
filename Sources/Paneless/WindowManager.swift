@@ -1599,11 +1599,41 @@ class WindowManager: WindowObserverDelegate {
     }
 
     /// Scroll to an adjacent column (delta: -1 for left, +1 for right).
+    /// Step focus one window along the strip, entering columns rather than skipping them.
+    ///
+    /// This used to move a whole column at a time, so a second window sharing a column
+    /// could never be reached with the same key that reaches everything else. Walk the
+    /// windows in the order they are laid out instead: through the current column first,
+    /// then on to the next one.
     private func niriFocusDirection(_ delta: Int) {
         guard !layoutEngine.niriColumns.isEmpty else { return }
-        let newCol = layoutEngine.niriActiveColumn + delta
-        guard newCol >= 0 && newCol < layoutEngine.niriColumns.count else { return }
-        niriScrollToColumn(newCol)
+
+        var col = min(max(layoutEngine.niriActiveColumn, 0), layoutEngine.niriColumns.count - 1)
+        var row = layoutEngine.niriColumns[col].clampedFocusedIndex
+        if let wid = focusedWindowID, let found = layoutEngine.findWindowInColumns(wid) {
+            col = found.col; row = found.row
+        }
+
+        row += delta
+        if row < 0 {
+            guard col > 0 else { return }
+            col -= 1
+            row = max(0, layoutEngine.niriColumns[col].windows.count - 1)
+        } else if row >= layoutEngine.niriColumns[col].windows.count {
+            guard col + 1 < layoutEngine.niriColumns.count else { return }
+            col += 1
+            row = 0
+        }
+
+        layoutEngine.niriColumns[col].focusedIndex = row
+        let target = layoutEngine.niriColumns[col].windows[row]
+        niriScrollToColumn(col)
+
+        if let element = axElements[target], let tracked = trackedWindows[target] {
+            AccessibilityBridge.focus(window: element, pid: tracked.pid)
+            focusedWindowID = target
+            onFocusChange?()
+        }
     }
 
     /// Animate scroll from current column to target column.
