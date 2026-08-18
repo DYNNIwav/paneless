@@ -75,6 +75,9 @@ class WindowManager: WindowObserverDelegate {
     private let summonSettleDelay: TimeInterval = 0.3
     private var pendingSummon: DispatchWorkItem?
 
+    /// New windows parked off-screen, due to be walked in from the edge of their own cell.
+    private var revealPending: Set<CGWindowID> = []
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -660,40 +663,27 @@ class WindowManager: WindowObserverDelegate {
             retileWithScaleIn(newWindowID: windowID); return
         }
 
-        // Out of sight, keeping its own size for now so nothing is clamped oddly.
         let parked = WorkspaceManager.shared.calculateHiddenPosition(
             screenFrame: screenFrame, originalSize: current.size)
         AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
 
-        // Work out where it will end up, without touching anything yet.
+        // Size it off-screen to whatever cell it is heading for, so the expensive
+        // relayout is paid out of sight. Where it ENTERS from is decided later, by the
+        // same code that decides where it lands, because working that out twice is how
+        // a window ended up flying toward one cell and settling in another.
         let windows = layoutEngine.tiledWindows
-        let region = getTilingRegion()
         let frames = NativeTiling.calculateFrames(
-            count: windows.count, region: region, gap: config.innerGap,
+            count: windows.count, region: getTilingRegion(), gap: config.innerGap,
             singleWindowPadding: config.singleWindowPadding,
             splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant)
-        guard let idx = windows.firstIndex(of: windowID), idx < frames.count else {
-            retileWithScaleIn(newWindowID: windowID); return
+        if let idx = windows.firstIndex(of: windowID), idx < frames.count {
+            AccessibilityBridge.setFrameDuringAnimation(
+                of: element, to: CGRect(origin: parked.origin, size: frames[idx].size))
         }
-        let target = frames[idx]
 
-        // The expensive call, made where it cannot be seen.
-        AccessibilityBridge.setFrameDuringAnimation(
-            of: element, to: CGRect(origin: parked.origin, size: target.size))
-
+        revealPending.insert(windowID)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            guard let self = self,
-                  self.trackedWindows[windowID] != nil,
-                  self.layoutEngine.tiledWindows.contains(windowID),
-                  let el = self.axElements[windowID] else { return }
-
-            // Step in from the nearest edge, so the travel is short and horizontal.
-            let fromLeft = target.midX < screenFrame.midX
-            let entry = CGRect(x: fromLeft ? screenFrame.minX - target.width : screenFrame.maxX,
-                               y: target.origin.y, width: target.width, height: target.height)
-            AccessibilityBridge.setFrameDuringAnimation(of: el, to: entry, setSize: false)
-
-            // One pass for everything, so nothing gets cancelled halfway.
+            guard let self = self, self.trackedWindows[windowID] != nil else { return }
             self.retileWithScaleIn(newWindowID: windowID)
         }
     }
@@ -734,7 +724,18 @@ class WindowManager: WindowObserverDelegate {
                 //
                 // Only fall back to the centred popin when the window has no readable
                 // frame yet, where there is nothing to glide from.
-                if let actual = AccessibilityBridge.getFrame(of: w.element),
+                if revealPending.remove(w.windowID) != nil {
+                    // Parked off-screen and already the right size. Step it in from the
+                    // edge nearest its own cell, derived from THIS target, so it always
+                    // arrives at the place it was travelling toward.
+                    let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
+                    let fromLeft = target.midX < screenFrame.midX
+                    let entry = CGRect(
+                        x: fromLeft ? screenFrame.minX - target.width : screenFrame.maxX,
+                        y: target.origin.y, width: target.width, height: target.height)
+                    AccessibilityBridge.setFrameDuringAnimation(of: w.element, to: entry, setSize: false)
+                    startFrame = entry
+                } else if let actual = AccessibilityBridge.getFrame(of: w.element),
                    AccessibilityBridge.isPlausibleFrame(actual) {
                     startFrame = actual
                 } else {
@@ -1110,6 +1111,7 @@ class WindowManager: WindowObserverDelegate {
         guard trackedWindows[windowID] != nil else { return }
 
         panelessLog("Window destroyed: \(windowID)")
+        revealPending.remove(windowID)
         lastWindowDestroyedAt = Date()
 
         // Last known rect of the window that is going away, so focus can follow the
