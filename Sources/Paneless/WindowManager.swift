@@ -1795,7 +1795,14 @@ class WindowManager: WindowObserverDelegate {
     /// window out of its column or into the next one.
     private func niriMoveColumn(right: Bool) {
         guard config.niriMode else { return }
-        let ci = layoutEngine.niriActiveColumn
+
+        // Find the column from the focused window rather than trusting niriActiveColumn,
+        // which can drift out of step with what is actually focused and then moves the
+        // wrong column.
+        var ci = layoutEngine.niriActiveColumn
+        if let wid = focusedWindowID, let found = layoutEngine.findWindowInColumns(wid) {
+            ci = found.col
+        }
         guard ci >= 0 && ci < layoutEngine.niriColumns.count else { return }
         let target = right ? ci + 1 : ci - 1
         guard target >= 0 && target < layoutEngine.niriColumns.count else { return }
