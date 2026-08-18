@@ -24,6 +24,10 @@ class Animator: NSObject {
     /// See Config.sizeOnce.
     var sizeOnce: Bool = false
 
+    /// Called with true when an animation starts and false when the last one ends.
+    /// Lets the owner run the ProMotion keepalive only while it is worth anything.
+    var onAnimationActive: ((Bool) -> Void)?
+
     private var isAnimating = false
     private let conn = CGSMainConnectionID()
 
@@ -208,6 +212,7 @@ class Animator: NSObject {
             return kCVReturnSuccess
         }
         displayLink = link
+        onAnimationActive?(true)
         CVDisplayLinkStart(link)
     }
 
@@ -289,6 +294,7 @@ class Animator: NSObject {
         busyWindows.removeAll()
         glideLock.unlock()
         isAnimating = false
+        onAnimationActive?(false)
     }
 
     /// Snap remaining windows to new positions + animate closing window
