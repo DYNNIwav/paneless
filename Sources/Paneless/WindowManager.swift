@@ -75,6 +75,10 @@ class WindowManager: WindowObserverDelegate {
     private let summonSettleDelay: TimeInterval = 0.3
     private var pendingSummon: DispatchWorkItem?
 
+    /// New windows parked off-screen, waiting to be shown once they are the right size.
+    /// Value is the frame the app originally chose, kept only for diagnostics.
+    private var revealPending: [CGWindowID: CGRect] = [:]
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -643,6 +647,44 @@ class WindowManager: WindowObserverDelegate {
 
     /// Retile with a scale-in effect for a newly created window.
     /// Avoids redundant AX getFrame calls by using calculated start frames directly.
+    /// Size a parked window off-screen, wait for the app to finish laying itself out,
+    /// then slide it in from the nearest edge.
+    ///
+    /// The expensive half of placing a new window is the app re-laying its content out
+    /// at a size it has never had. Doing that while the window sits off-screen means the
+    /// only thing anyone sees is the arrival, which is pure translation and therefore
+    /// the smooth path: 0.2-2ms a write against up to 53ms for a resize.
+    private func scheduleReveal(_ windowID: CGWindowID, element: AXUIElement, target: CGRect) {
+        let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
+        guard let parkedNow = AccessibilityBridge.getFrame(of: element) else {
+            revealPending.removeValue(forKey: windowID)
+            return
+        }
+
+        // Final size, still out of sight. This is the call that costs.
+        AccessibilityBridge.setFrameDuringAnimation(
+            of: element,
+            to: CGRect(origin: parkedNow.origin, size: target.size))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self = self, self.revealPending[windowID] != nil,
+                  self.trackedWindows[windowID] != nil else { return }
+            self.revealPending.removeValue(forKey: windowID)
+
+            // Come in from whichever edge the slot is nearest, so the travel is short.
+            let fromLeft = target.midX < screenFrame.midX
+            let entry = CGRect(
+                x: fromLeft ? screenFrame.minX - target.width : screenFrame.maxX,
+                y: target.origin.y,
+                width: target.width, height: target.height)
+            AccessibilityBridge.setFrameDuringAnimation(of: element, to: entry, setSize: false)
+
+            Animator.shared.animate([Animator.Transition(
+                windowID: windowID, element: element,
+                startFrame: entry, targetFrame: target, isNewWindow: true)])
+        }
+    }
+
     private func retileWithScaleIn(newWindowID: CGWindowID) {
         if config.niriMode {
             retileNiriWithScaleIn(newWindowID: newWindowID)
@@ -662,9 +704,18 @@ class WindowManager: WindowObserverDelegate {
             splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant
         )
 
+        // A parked new window is dressed off-screen and let in afterwards, so it is left
+        // out of this pass entirely: the others reflow now, it arrives ready.
+        if revealPending[newWindowID] != nil,
+           let idx = windows.firstIndex(where: { $0.windowID == newWindowID }),
+           idx < targetFrames.count {
+            scheduleReveal(newWindowID, element: windows[idx].element, target: targetFrames[idx])
+        }
+
         var transitions: [Animator.Transition] = []
         for (i, w) in windows.enumerated() where i < targetFrames.count {
             let target = targetFrames[i]
+            if w.windowID == newWindowID, revealPending[newWindowID] != nil { continue }
 
             let startFrame: CGRect
             let isNew: Bool
@@ -866,6 +917,19 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
+        // Get it out of sight immediately. Everything below this line, the dialog and
+        // small-window probes, the layout, and above all the app laying itself out at a
+        // new size, then happens where nobody can watch it happen. A position write is
+        // 0.2-2ms; the resize it hides costs up to 53ms on a heavy app.
+        if config.revealWhenReady, let element = axElements[windowID],
+           let current = AccessibilityBridge.getFrame(of: element) {
+            revealPending[windowID] = current
+            let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
+            let parked = WorkspaceManager.shared.calculateHiddenPosition(
+                screenFrame: screenFrame, originalSize: current.size)
+            AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
+        }
+
         // Auto-float dialogs and small windows
         if !shouldFloat, config.autoFloatDialogs, let element = axElements[windowID] {
             if AccessibilityBridge.isDialog(element) || AccessibilityBridge.isSmallWindow(element) {
@@ -1053,6 +1117,7 @@ class WindowManager: WindowObserverDelegate {
         guard trackedWindows[windowID] != nil else { return }
 
         panelessLog("Window destroyed: \(windowID)")
+        revealPending.removeValue(forKey: windowID)
         lastWindowDestroyedAt = Date()
 
         // Last known rect of the window that is going away, so focus can follow the
