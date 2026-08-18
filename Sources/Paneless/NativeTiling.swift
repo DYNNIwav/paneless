@@ -240,13 +240,36 @@ enum NativeTiling {
     /// Calculate frames for Niri scrolling column mode.
     /// Each column may contain multiple windows stacked vertically.
     /// The active column is centered on screen; off-screen columns are hidden.
+    /// Split a rect between n windows, always cutting the longer side.
+    ///
+    /// The same rule every BSP tiler uses, and it needs no configuration because it
+    /// gives the most square pane available at every count: two windows in a tall column
+    /// end up one above the other, two in a wide one end up side by side, and four end up
+    /// in a 2x2 whose panes have the same proportions the whole column had.
+    static func splitEvenly(_ rect: CGRect, count n: Int) -> [CGRect] {
+        guard n > 1 else { return n == 1 ? [rect] : [] }
+        let a = n / 2, b = n - a
+        let fa = CGFloat(a) / CGFloat(n)
+        let first: CGRect, second: CGRect
+        if rect.width >= rect.height {
+            let w = rect.width * fa
+            first = CGRect(x: rect.minX, y: rect.minY, width: w, height: rect.height)
+            second = CGRect(x: rect.minX + w, y: rect.minY, width: rect.width - w, height: rect.height)
+        } else {
+            let h = rect.height * fa
+            first = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: h)
+            second = CGRect(x: rect.minX, y: rect.minY + h, width: rect.width, height: rect.height - h)
+        }
+        return splitEvenly(first, count: a) + splitEvenly(second, count: b)
+    }
+
     static func calculateNiriFrames(
         columns: [NiriColumn],
         region: TilingRegion,
         gap: CGFloat,
         activeColumn: Int,
         defaultColumnWidth: CGFloat,
-        sideBySide: Bool = false,
+        stackMode: String = "auto",
         scrollOffset: CGFloat = 0,
         fillScreen: Bool = false,
         resultingScrollOffset: inout CGFloat
@@ -322,7 +345,14 @@ enum NativeTiling {
                 // do in niri. Side by side is offered because on a wide screen a column
                 // is short and broad, so splitting its height twice leaves two letterbox
                 // strips, while splitting its width gives two usable panes.
-                if sideBySide {
+                if stackMode == "auto" {
+                    let column = CGRect(x: colX, y: region.y, width: colW, height: region.height)
+                    for (wid, r) in zip(col.windows, splitEvenly(column, count: windowCount)) {
+                        windowFrames.append((windowID: wid, frame: CGRect(
+                            x: r.minX + halfGap, y: r.minY + halfGap,
+                            width: max(r.width - gap, 100), height: max(r.height - gap, 100))))
+                    }
+                } else if stackMode == "horizontal" {
                     let windowWidth = colW / CGFloat(windowCount)
                     for (wi, wid) in col.windows.enumerated() {
                         let frame = CGRect(

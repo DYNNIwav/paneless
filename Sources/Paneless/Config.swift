@@ -44,9 +44,15 @@ struct PanelessConfig {
     /// default means only one window is ever visible, which defeats the point of a strip.
     var niriColumnWidth: CGFloat = 0.5
     /// How windows consumed into the same column are arranged inside it.
-    /// "vertical" stacks them one above the other, which is what niri itself does.
-    /// "horizontal" puts them side by side, which suits a wide screen better.
-    var niriColumnStack: String = "vertical"
+    ///
+    /// "auto" splits along whichever side is longer, so the panes come out as square as
+    /// they can. Neither fixed direction is right on its own, because the answer changes
+    /// with the column width: in a third-width column here, two side by side are 628 wide
+    /// against 1566 tall, while stacked they are a comfortable 1265 by 779. In a
+    /// two-thirds column it is the other way round.
+    ///
+    /// "vertical" and "horizontal" force one or the other.
+    var niriColumnStack: String = "auto"
     /// Widen columns to fill the screen while they still fit, rather than leaving
     /// wallpaper beside them. One column takes the whole width, two take half each,
     /// three take a third, and from there the configured width applies and the strip
@@ -231,7 +237,7 @@ struct PanelessConfig {
                 case "niri_fill_screen": config.niriFillScreen = value != "false" && value != "0"
                 case "niri_column_stack":
                     let st = value.lowercased()
-                    if st == "vertical" || st == "horizontal" { config.niriColumnStack = st }
+                    if st == "vertical" || st == "horizontal" || st == "auto" { config.niriColumnStack = st }
                 case "niri_column_width": config.niriColumnWidth = max(0.1, min(3.0, CGFloat(Double(value) ?? 1.0)))
                 case "focus_follows_app": config.focusFollowsApp = value != "false" && value != "0"
                 case "hyperkey":
