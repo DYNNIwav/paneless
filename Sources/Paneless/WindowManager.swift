@@ -2344,6 +2344,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Virtual Workspace Switching
 
     private func switchVirtualWorkspace(_ number: Int) {
+        let conn = CGSMainConnectionID()
         guard number >= 1 && number <= 9 else { return }
 
         let screen = NSScreen.safeMain
@@ -2364,6 +2365,17 @@ class WindowManager: WindowObserverDelegate {
 
         // Remove dim overlays before switching (they reference old workspace windows)
         restoreAllDimming()
+
+        // Make the whole switch land as one frame.
+        //
+        // The old workspace's windows are parked off-screen before the new ones are
+        // placed, so between those two steps there is nothing on screen and the desktop
+        // shows through. Freezing compositor output across the swap means the screen
+        // goes straight from one workspace to the other. Safe here in a way it would not
+        // be around an animation: this block is synchronous and waits for nothing, and
+        // the defer guarantees the release even if something below throws.
+        SLSDisableUpdate(conn)
+        defer { SLSReenableUpdate(conn) }
 
         // Save current layout variant for this workspace
         workspaceLayouts["\(monitorID)-\(currentWS)"] = layoutEngine.layoutVariant
