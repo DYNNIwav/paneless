@@ -247,6 +247,12 @@ class Animator: NSObject {
 
     /// Snap remaining windows to new positions + animate closing window
     /// with popout shrink + fade.
+    /// Close a window and flow the remaining ones into the space it leaves.
+    ///
+    /// The closing window itself cannot be animated: shrinking or fading it would need
+    /// SLSSetWindowTransform or CGSSetWindowAlpha, and both are no-ops on windows owned
+    /// by another process. So it goes at once, and the windows that remain glide into
+    /// their new frames, which is where the motion actually reads from.
     func animateWithClose(
         redistributeTransitions: [Transition],
         closingWindowID: CGWindowID,
@@ -255,32 +261,38 @@ class Animator: NSObject {
     ) {
         cancelAll()
 
-        self.closingWindowID = closingWindowID
-        self.closingFrame = closingFrame
-        self.closeCompletion = completion
+        // Close first so the gap is real before anything moves into it.
+        completion()
 
-        let frames = redistributeTransitions.map { (element: $0.element, frame: $0.targetFrame) }
+        guard enabled, !redistributeTransitions.isEmpty else {
+            if !redistributeTransitions.isEmpty {
+                AccessibilityBridge.batchSetFrames(
+                    redistributeTransitions.map { (element: $0.element, frame: $0.targetFrame) })
+            }
+            return
+        }
 
-        SLSDisableUpdate(conn)
-        if !frames.isEmpty {
-            AccessibilityBridge.batchSetFrames(frames)
+        let targets = redistributeTransitions.map { (element: $0.element, frame: $0.targetFrame) }
+        var steps: [Glide] = []
+        var pids = Set<pid_t>()
+        for t in redistributeTransitions {
+            let from = t.startFrame.width > 1 ? t.startFrame
+                                              : (AccessibilityBridge.getFrame(of: t.element) ?? t.targetFrame)
+            guard abs(from.origin.x - t.targetFrame.origin.x) > 1
+                || abs(from.origin.y - t.targetFrame.origin.y) > 1
+                || abs(from.width - t.targetFrame.width) > 1
+                || abs(from.height - t.targetFrame.height) > 1 else { continue }
+            var pid: pid_t = 0
+            AXUIElementGetPid(t.element, &pid)
+            pids.insert(pid)
+            steps.append(Glide(windowID: t.windowID, element: t.element, from: from, to: t.targetFrame))
         }
-        // Start close animation: identity transform (full size)
-        if hasGPUTransform {
-            SLSSetWindowTransform(conn, closingWindowID, .identity)
-        }
-        SLSReenableUpdate(conn)
 
-        if enabled && hasGPUTransform {
-            startTimer(duration: windowCloseDuration, tick: tickClose)
-        } else {
-            CGSSetWindowAlpha(conn, closingWindowID, 0.0)
-            let cb = self.closeCompletion
-            self.closingWindowID = nil
-            self.closingFrame = .zero
-            self.closeCompletion = nil
-            cb?()
+        guard !steps.isEmpty else {
+            AccessibilityBridge.batchSetFrames(targets)
+            return
         }
+        startGlide(steps, targets: targets, pids: pids)
     }
 
     // MARK: - Popin Animation (new window: scale 87%→100% + fade in)
