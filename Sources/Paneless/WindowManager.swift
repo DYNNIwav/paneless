@@ -1030,6 +1030,10 @@ class WindowManager: WindowObserverDelegate {
         panelessLog("Window destroyed: \(windowID)")
         lastWindowDestroyedAt = Date()
 
+        // Last known rect of the window that is going away, so focus can follow the
+        // position rather than snapping to the top left.
+        let vacatedFrame = trackedWindows[windowID]?.frame
+
         // Clean up minimized state
         minimizedWindows.remove(windowID)
         niriHiddenWindows.remove(windowID)
@@ -1139,10 +1143,12 @@ class WindowManager: WindowObserverDelegate {
                 || !appStillTiled
 
             if shouldRefocus {
-                if let firstWid = layoutEngine.tiledWindows.first,
-                   let element = axElements[firstWid], let tracked = trackedWindows[firstWid] {
+                let heir = vacatedFrame.flatMap { windowTakingOver(vacated: $0) }
+                    ?? layoutEngine.tiledWindows.first
+                if let heirID = heir,
+                   let element = axElements[heirID], let tracked = trackedWindows[heirID] {
                     AccessibilityBridge.focus(window: element, pid: tracked.pid)
-                    focusedWindowID = firstWid
+                    focusedWindowID = heirID
                 } else if layoutEngine.tiledWindows.isEmpty && floatingWindows.isEmpty {
                     // No windows left on this workspace — focus Finder/desktop.
                     // Suppress focus-follows-app so activating Finder doesn't
@@ -2330,6 +2336,25 @@ class WindowManager: WindowObserverDelegate {
         panelessLog("Switched to workspace \(number) on \(monitorID)")
     }
 
+    /// Which window takes over the space a departing one occupied.
+    ///
+    /// Focus should follow the position you were looking at. Jumping to the top left
+    /// every time means that sending away the window in the lower right leaves you
+    /// somewhere you never asked to be. Call after the window is out of the layout
+    /// engine but before retiling, so the frames are the ones about to be applied.
+    private func windowTakingOver(vacated: CGRect) -> CGWindowID? {
+        let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
+        guard !layouts.isEmpty else { return nil }
+        let centre = CGPoint(x: vacated.midX, y: vacated.midY)
+        if let covering = layouts.first(where: { $0.1.contains(centre) }) {
+            return covering.0
+        }
+        return layouts.min(by: {
+            hypot($0.1.midX - centre.x, $0.1.midY - centre.y)
+                < hypot($1.1.midX - centre.x, $1.1.midY - centre.y)
+        })?.0
+    }
+
     private func moveToVirtualWorkspace(_ number: Int) {
         guard number >= 1 && number <= 9 else { return }
         guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
@@ -2348,6 +2373,10 @@ class WindowManager: WindowObserverDelegate {
             panelessLog("Window already on workspace \(number)")
             return
         }
+
+        // The rect this window is giving up, read before anything moves it.
+        let vacatedFrame = axElements[windowID].flatMap { AccessibilityBridge.getFrame(of: $0) }
+            ?? trackedWindows[windowID]?.frame
 
         // Remove from current WM state
         let wasTiled = layoutEngine.contains(windowID)
@@ -2384,9 +2413,11 @@ class WindowManager: WindowObserverDelegate {
         }
         WorkspaceManager.shared.workspaces[monitorID, default: [:]][number] = targetWS
 
-        // Focus next window on current workspace
+        // Focus whatever moves into the space this window just gave up, so you stay
+        // where you were looking instead of being thrown to the top left corner.
         if focusedWindowID == windowID {
-            focusedWindowID = layoutEngine.tiledWindows.first
+            focusedWindowID = vacatedFrame.flatMap { windowTakingOver(vacated: $0) }
+                ?? layoutEngine.tiledWindows.first
             if let fid = focusedWindowID, let el = axElements[fid], let t = trackedWindows[fid] {
                 AccessibilityBridge.focus(window: el, pid: t.pid)
             }
