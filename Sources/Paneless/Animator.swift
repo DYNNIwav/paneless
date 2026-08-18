@@ -137,11 +137,28 @@ class Animator: NSObject {
 
     // MARK: - Frame Glide
 
-    struct Glide {
+    /// A reference type because the animation learns about the window as it runs.
+    final class Glide {
         let windowID: CGWindowID
         let element: AXUIElement
         let from: CGRect
         let to: CGRect
+        /// The window travels without changing size, so kAXSize is never written.
+        let moveOnly: Bool
+        /// Set once the app has demonstrated it will not take the size we ask for.
+        /// Fixed-size windows and windows that snap to a character grid, like terminals,
+        /// otherwise cost a full resize per frame and ignore every one of them.
+        var sizeRefused = false
+        /// Whether the first write has been checked against what the app actually did.
+        var constraintChecked = false
+
+        init(windowID: CGWindowID, element: AXUIElement, from: CGRect, to: CGRect) {
+            self.windowID = windowID
+            self.element = element
+            self.from = from
+            self.to = to
+            self.moveOnly = abs(from.width - to.width) < 2 && abs(from.height - to.height) < 2
+        }
     }
 
     private var glides: [Glide] = []
@@ -164,6 +181,9 @@ class Animator: NSObject {
         glideStartTime = CACurrentMediaTime()
         busyWindows.removeAll()
         glideLock.unlock()
+
+        // A hung app must not be able to stall the loop for the multi-second AX default.
+        for step in steps { AccessibilityBridge.limitMessagingTime(of: step.element) }
 
         // Off for the duration, so the apps don't animate against us.
         restoreEnhancedUI = AccessibilityBridge.setEnhancedUI(pids: pids, enabled: false)
@@ -218,8 +238,21 @@ class Animator: NSObject {
                 continue
             }
 
+            let wantsSize = !g.moveOnly && !g.sizeRefused
             axQueue.async { [weak self] in
-                AccessibilityBridge.setFrameDuringAnimation(of: g.element, to: rect)
+                AccessibilityBridge.setFrameDuringAnimation(of: g.element, to: rect, setSize: wantsSize)
+
+                // Ask once whether the app is actually honouring the size. If it gave us
+                // something else, it is constrained, and every further resize this
+                // animation would be paid for and thrown away.
+                if wantsSize && !g.constraintChecked {
+                    g.constraintChecked = true
+                    if let actual = AccessibilityBridge.getFrame(of: g.element),
+                       abs(actual.width - rect.width) > 2 || abs(actual.height - rect.height) > 2 {
+                        g.sizeRefused = true
+                    }
+                }
+
                 guard let self = self else { return }
                 self.glideLock.lock()
                 self.busyWindows.remove(g.windowID)

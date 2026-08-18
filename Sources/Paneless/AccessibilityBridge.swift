@@ -111,16 +111,30 @@ enum AccessibilityBridge {
     /// dance that `setFrame` does per call, because that costs two extra IPC round
     /// trips to the app every time. Toggle it once around the whole animation with
     /// `setEnhancedUI` instead. Safe to call off the main thread.
-    static func setFrameDuringAnimation(of element: AXUIElement, to rect: CGRect) {
+    static func setFrameDuringAnimation(of element: AXUIElement, to rect: CGRect, setSize: Bool = true) {
         guard isPlausibleFrame(rect) else { return }
-        var size = rect.size
-        var position = rect.origin
-        if let sizeValue = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+        // Size is the expensive half by a wide margin: measured medians per call are
+        // 0.2-2ms for position against 5ms for Ghostty and 25-53ms for Safari, because
+        // the app has to lay its content out again. Skipping it when it cannot change
+        // anything is the difference between 120fps and 20fps.
+        if setSize {
+            var size = rect.size
+            if let sizeValue = AXValueCreate(.cgSize, &size) {
+                AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+            }
         }
+        var position = rect.origin
         if let posValue = AXValueCreate(.cgPoint, &position) {
             AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
         }
+    }
+
+    /// Cap how long an AX call on this element may block. The system default is several
+    /// seconds, so one hung app can otherwise wedge an animation loop for that long.
+    /// Generous next to the slowest resize measured here (Safari, 51.75ms) and far below
+    /// the default.
+    static func limitMessagingTime(of element: AXUIElement, to seconds: Float = 0.25) {
+        AXUIElementSetMessagingTimeout(element, seconds)
     }
 
     /// Turn AXEnhancedUserInterface off (or back on) for a set of apps. Off stops the
