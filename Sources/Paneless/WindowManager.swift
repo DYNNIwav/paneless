@@ -179,6 +179,7 @@ class WindowManager: WindowObserverDelegate {
         Animator.shared.cancelAll()
         BorderManager.shared.removeAll()
         restoreAllDimming()
+        unparkEverything()
         stopFocusFollowsMouse()
         stopResizeMonitor()
         stopDisplayLink()
@@ -2749,6 +2750,44 @@ class WindowManager: WindowObserverDelegate {
     }
 
     // MARK: - Crash Recovery
+
+    /// Bring every parked window back on screen before shutting down.
+    ///
+    /// Windows on inactive workspaces live off-screen at the parking corner, which is
+    /// fine while Paneless is running and can bring them back. It is not fine once it
+    /// stops: the windows are then unreachable, with nothing on screen to explain where
+    /// they went. Startup already recovers them, but only if Paneless is started again,
+    /// and it may not be.
+    ///
+    /// Restore each to the frame its workspace remembers, so they land spread out where
+    /// they belong rather than piled on one spot.
+    private func unparkEverything() {
+        let wsMgr = WorkspaceManager.shared
+        var restored = 0
+        for (monitorID, workspaces) in wsMgr.workspaces {
+            guard let screen = NSScreen.screens.first(where: { wsMgr.screenID(for: $0) == monitorID })
+                    ?? NSScreen.screens.first else { continue }
+            let screenFrame = screenFrameInAX(for: screen)
+            let active = wsMgr.activeWorkspace[monitorID] ?? 1
+            for (number, ws) in workspaces where number != active {
+                for (wid, tracked) in ws.trackedWindows {
+                    guard let element = ws.axElements[wid] else { continue }
+                    var frame = tracked.frame
+                    if !AccessibilityBridge.isPlausibleFrame(frame)
+                        || wsMgr.isHiddenPosition(screenFrame: screenFrame, windowFrame: frame) {
+                        frame = CGRect(x: screenFrame.midX - frame.width / 2,
+                                       y: screenFrame.midY - frame.height / 2,
+                                       width: max(frame.width, 400), height: max(frame.height, 300))
+                    }
+                    AccessibilityBridge.setFrame(of: element, to: frame)
+                    restored += 1
+                }
+            }
+        }
+        if restored > 0 {
+            panelessLog("Brought \(restored) parked window(s) back on screen before shutting down")
+        }
+    }
 
     /// On launch, check for windows stuck at hidden positions (from a previous crash)
     /// and move them back on-screen.
