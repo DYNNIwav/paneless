@@ -933,7 +933,21 @@ class WindowManager: WindowObserverDelegate {
         // Everything after this point costs AX round trips to an app that may be slow,
         // measured at about 161ms, and until the window is out of sight the user is
         // watching it sit wherever the app happened to put it. That wait is the ghost.
-        if config.revealWhenReady, let element = axElements[windowID],
+        // Only get it out of sight if it opened somewhere we would not want it seen.
+        //
+        // Apps restore their last window frame, and that frame is one Paneless set, so a
+        // window very often opens already inside the tiling area: measured, Notes opens
+        // 19px from its target. Parking such a window sends a correctly placed window
+        // off-screen and walks it back, which is the very disturbance the parking exists
+        // to prevent. Leave those alone and let them settle in place.
+        let alreadyWellPlaced: Bool = {
+            guard let element = axElements[windowID],
+                  let f = AccessibilityBridge.getFrame(of: element) else { return false }
+            let region = getTilingRegion().cgRect
+            return region.contains(CGPoint(x: f.midX, y: f.midY))
+        }()
+
+        if config.revealWhenReady, !alreadyWellPlaced, let element = axElements[windowID],
            let current = AccessibilityBridge.getFrame(of: element) {
             // Remember where the app put it. Parking happens before we know whether this
             // window will be tiled at all, and a window that turns out to be floating
