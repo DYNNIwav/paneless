@@ -68,6 +68,13 @@ class WindowManager: WindowObserverDelegate {
     // summon that app onto the new workspace and hijack focus.
     private var lastWorkspaceSwitchAt: Date = .distantPast
 
+    // How long to wait after an app activation before acting on it. macOS activates
+    // the next app in z-order when a window closes, and that notification arrives
+    // ahead of the window's destruction, so an immediate decision cannot tell a user
+    // request apart from that fallback.
+    private let summonSettleDelay: TimeInterval = 0.3
+    private var pendingSummon: DispatchWorkItem?
+
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
 
@@ -1209,46 +1216,66 @@ class WindowManager: WindowObserverDelegate {
         let hasWindowOnCurrent = trackedWindows.values.contains { $0.pid == pid }
         if hasWindowOnCurrent { return }
 
-        // Don't follow app activation that was triggered by closing the last window:
-        // macOS then activates the next app in Z-order, which may live on another
-        // workspace, and summoning it would drag that window out of its workspace.
-        //
-        // Ask state, not the clock. The window we held focus on answers immediately
-        // once it is gone, so this is decided correctly however the notification and
-        // the destroy happen to be ordered. The old check compared against
-        // `lastWindowDestroyedAt`, which is written by the poll and so can still be
-        // seconds stale at the moment this activation arrives.
-        if let focused = focusedWindowID,
-           let element = axElements[focused],
-           !AccessibilityBridge.isAlive(element) {
-            panelessLog("Focus-follows-app: suppressed (focused window died)")
-            windowDestroyed(windowID: focused)
-            return
-        }
-
-        if Date().timeIntervalSince(lastWindowDestroyedAt) < 0.4 {
-            panelessLog("Focus-follows-app: suppressed (window closed <400ms ago)")
-            return
-        }
-
-        // Don't summon right after a workspace switch — macOS momentarily re-activates
+        // Don't summon right after a workspace switch. macOS momentarily re-activates
         // the previous workspace's app, which would otherwise be pulled here and steal focus.
         if Date().timeIntervalSince(lastWorkspaceSwitchAt) < 0.5 {
             return
         }
 
-        // Search other workspaces for windows belonging to this app's PID and pull
-        // them onto the current workspace so the user stays in context.
+        // Only a parked window is worth waiting on.
         guard let monitorWorkspaces = WorkspaceManager.shared.workspaces[monitorID] else { return }
         let hasWindowElsewhere = monitorWorkspaces.contains { wsNum, ws in
             wsNum != currentWS && ws.trackedWindows.values.contains { $0.pid == pid }
         }
-        if hasWindowElsewhere {
-            panelessLog("Focus-follows-app: summoning \(name) (pid \(pid)) to workspace \(currentWS)")
-            isAutoSwitching = true
-            summonAppWindowsToCurrentWorkspace(pid: pid)
-            isAutoSwitching = false
+        guard hasWindowElsewhere else { return }
+
+        // Closing a window makes macOS activate the next app in z-order, and that
+        // activation reaches us BEFORE the window's death does: measured at 171ms
+        // ahead of it. So at this instant there is nothing to distinguish a user
+        // asking for this app from macOS handing it over after a close, and no
+        // synchronous check can tell them apart because the truth has not arrived
+        // yet. Let the teardown land, then decide.
+        pendingSummon?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.pendingSummon = nil
+            self.completeSummon(pid: pid, name: name, monitorID: monitorID, workspace: currentWS)
         }
+        pendingSummon = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + summonSettleDelay, execute: work)
+    }
+
+    /// Second half of focus-follows-app, run once any window teardown that could have
+    /// caused the activation has had time to reach us.
+    private func completeSummon(pid: pid_t, name: String, monitorID: String, workspace: Int) {
+        // A window died around this activation, so macOS handed us this app after a
+        // close rather than the user asking for it. Summoning now would drag a window
+        // out of the workspace it belongs to, which is the thing we must never do.
+        // The window covers a destroy landing either side of the activation.
+        if Date().timeIntervalSince(lastWindowDestroyedAt) < summonSettleDelay + 0.2 {
+            panelessLog("Focus-follows-app: suppressed (window closed around activation)")
+            return
+        }
+
+        // The world may have moved while we waited, so re-establish every precondition.
+        guard config.focusFollowsApp, !isAutoSwitching else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+
+        let nowMonitor = WorkspaceManager.shared.screenID(for: NSScreen.safeMain)
+        guard nowMonitor == monitorID,
+              (WorkspaceManager.shared.activeWorkspace[monitorID] ?? 1) == workspace else { return }
+        if trackedWindows.values.contains(where: { $0.pid == pid }) { return }
+
+        guard let monitorWorkspaces = WorkspaceManager.shared.workspaces[monitorID] else { return }
+        let stillParked = monitorWorkspaces.contains { wsNum, ws in
+            wsNum != workspace && ws.trackedWindows.values.contains { $0.pid == pid }
+        }
+        guard stillParked else { return }
+
+        panelessLog("Focus-follows-app: summoning \(name) (pid \(pid)) to workspace \(workspace)")
+        isAutoSwitching = true
+        summonAppWindowsToCurrentWorkspace(pid: pid)
+        isAutoSwitching = false
     }
 
     /// Pull every window belonging to `pid` that is parked on another workspace of the
@@ -2287,6 +2314,9 @@ class WindowManager: WindowObserverDelegate {
 
         onSpaceChange?()
         lastWorkspaceSwitchAt = Date()
+        // A summon queued from before the switch belongs to the old workspace.
+        pendingSummon?.cancel()
+        pendingSummon = nil
         panelessLog("Switched to workspace \(number) on \(monitorID)")
     }
 

@@ -81,19 +81,6 @@ enum AccessibilityBridge {
         }
     }
 
-    /// Whether a window element is still alive. A destroyed window's AXUIElement
-    /// answers `.invalidUIElement` immediately, which makes this an authoritative,
-    /// synchronous check, unlike CGWindowList, which keeps listing the window for
-    /// a short while after the app has torn it down.
-    static func isAlive(_ element: AXUIElement) -> Bool {
-        var value: AnyObject?
-        let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value)
-        // Only `.invalidUIElement` means the window is definitively gone. `.cannotComplete`
-        // just means the app is busy, and treating that as death would suppress summons
-        // for slow apps. An app that quit outright is handled by applicationTerminated.
-        return err != .invalidUIElement
-    }
-
     /// Batch set frames for multiple windows. Disables AXEnhancedUserInterface once per app
     /// instead of once per window, reducing IPC overhead significantly.
     static func batchSetFrames(_ frames: [(element: AXUIElement, frame: CGRect)]) {
