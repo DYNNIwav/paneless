@@ -90,6 +90,7 @@ class WindowManager: WindowObserverDelegate {
         eventTap.keyBindings = config.keyBindings
         eventTap.hyperkeyCode = config.hyperkeyCode
         Animator.shared.enabled = config.animations
+        Animator.shared.sizeOnce = config.sizeOnce
 
         observer.delegate = self
         observer.start()
@@ -566,6 +567,7 @@ class WindowManager: WindowObserverDelegate {
 
         // Update animations
         Animator.shared.enabled = config.animations
+        Animator.shared.sizeOnce = config.sizeOnce
 
         // Update ProMotion forcing
         if config.forceProMotion {

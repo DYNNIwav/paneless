@@ -20,6 +20,9 @@ class Animator: NSObject {
     static let shared = Animator()
 
     var enabled: Bool = true
+    /// Take the final size in one step at the start and animate position only.
+    /// See Config.sizeOnce.
+    var sizeOnce: Bool = false
 
     private var isAnimating = false
     private let conn = CGSMainConnectionID()
@@ -177,6 +180,18 @@ class Animator: NSObject {
 
         // A hung app must not be able to stall the loop for the multi-second AX default.
         for step in steps { AccessibilityBridge.limitMessagingTime(of: step.element) }
+
+        // Pay every resize once, here, rather than forty times during the animation.
+        // The window snaps to its final size and then travels at full frame rate.
+        if sizeOnce {
+            for step in steps where !step.moveOnly {
+                var size = step.to.size
+                if let v = AXValueCreate(.cgSize, &size) {
+                    AXUIElementSetAttributeValue(step.element, kAXSizeAttribute as CFString, v)
+                }
+                step.sizeRefused = true
+            }
+        }
 
         // Off for the duration, so the apps don't animate against us.
         restoreEnhancedUI = AccessibilityBridge.setEnhancedUI(pids: pids, enabled: false)

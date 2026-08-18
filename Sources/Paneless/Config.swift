@@ -22,6 +22,11 @@ struct PanelessConfig {
 
     // Animations (GPU-composited Hyprland-style)
     var animations: Bool = true
+    /// Set each window's final size once at the start of an animation and interpolate
+    /// only its position, instead of interpolating both. A resize costs 25-53ms on
+    /// Safari against 0.2-2ms for a move, so this trades a size that snaps at the start
+    /// for motion that stays smooth. rift ships this behaviour by default.
+    var sizeOnce: Bool = false
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false
@@ -198,6 +203,7 @@ struct PanelessConfig {
                 case "dim_unfocused": config.dimUnfocused = CGFloat(Double(value) ?? 0)
                 case "native_animation": config.nativeAnimation = value == "true" || value == "1"
                 case "animations": config.animations = value != "false" && value != "0"
+                case "size_once": config.sizeOnce = value == "true" || value == "1"
                 case "force_promotion": config.forceProMotion = value == "true" || value == "1"
                 case "tiling_mode":
                     let mode = value.lowercased()
@@ -473,6 +479,7 @@ struct PanelessConfig {
         lines.append("inner_gap = \(Int(innerGap))")
         lines.append("outer_gap = \(Int(outerGap))")
         lines.append("animations = \(animations)")
+        lines.append("size_once = \(sizeOnce)")
         lines.append("native_animation = \(nativeAnimation)")
         lines.append("single_window_padding = \(Int(singleWindowPadding))")
         lines.append("focus_follows_mouse = \(focusFollowsMouse)")
