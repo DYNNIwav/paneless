@@ -33,6 +33,20 @@ struct GeneralTab: View {
                             .frame(width: 44, alignment: .trailing)
                     }
                     SettingDescription(text: "Width of each column as a percentage of the screen. 100% = one column fills the screen.")
+
+                    Picker("Windows sharing a column", selection: $viewModel.niriColumnStack) {
+                        Text("Automatic").tag("auto")
+                        Text("Stacked").tag("vertical")
+                        Text("Side by side").tag("horizontal")
+                    }
+                    SettingDescription(text: viewModel.niriColumnStack == "auto"
+                        ? "Splits whichever side is longer, so panes stay as square as possible whatever the column width."
+                        : (viewModel.niriColumnStack == "vertical"
+                            ? "Always one above the other. Best in wide columns; in narrow ones it makes letterbox strips."
+                            : "Always beside each other. Best in wide columns; in narrow ones it makes thin slivers."))
+
+                    Toggle("Fill the screen when there is room", isOn: $viewModel.niriFillScreen)
+                    SettingDescription(text: "One window takes the whole screen, two take half each, three a third, and only then does the strip start to scroll.")
                 }
 
                 HStack {
@@ -63,10 +77,16 @@ struct GeneralTab: View {
             }
 
             Section {
-                Toggle("GPU animations", isOn: $viewModel.animations)
+                Toggle("Animate window movement", isOn: $viewModel.animations)
                 SettingDescription(text: "Smooth window transitions using GPU-composited transforms. Disable for instant snapping.")
 
                 Toggle("Native macOS compositor", isOn: $viewModel.nativeAnimation)
+
+                Toggle("Resize in one step", isOn: $viewModel.sizeOnce)
+                SettingDescription(text: "Take the final size at once and animate only the movement. A resize costs up to 50ms on a heavy app against 2ms for a move, so this keeps the frame rate up at the cost of the size snapping.")
+
+                Toggle("Let apps animate themselves", isOn: $viewModel.appDrivenAnimation)
+                SettingDescription(text: "Hand each app its destination once and let it run its own animation. Fewer messages and no cost to Paneless, but the pacing is less even and the curve is the system's rather than ours.")
                 SettingDescription(text: "Use the built-in macOS window tiling animation instead of GPU transforms. Incompatible with gaps.")
             } header: {
                 Text("Animation")

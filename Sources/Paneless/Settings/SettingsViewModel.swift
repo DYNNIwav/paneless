@@ -18,7 +18,11 @@ class SettingsViewModel: ObservableObject {
     @Published var forceProMotion: Bool = false
     @Published var dimUnfocused: CGFloat = 0
     @Published var hyperkeyOption: String = "disabled"
-    @Published var niriColumnWidth: CGFloat = 1.0
+    @Published var niriColumnWidth: CGFloat = 0.5
+    @Published var niriColumnStack: String = "auto"
+    @Published var niriFillScreen: Bool = true
+    @Published var sizeOnce: Bool = false
+    @Published var appDrivenAnimation: Bool = false
 
     // MARK: - Border
 
@@ -93,6 +97,10 @@ class SettingsViewModel: ObservableObject {
         forceProMotion = config.forceProMotion
         dimUnfocused = config.dimUnfocused
         niriColumnWidth = config.niriColumnWidth
+        niriColumnStack = config.niriColumnStack
+        niriFillScreen = config.niriFillScreen
+        sizeOnce = config.sizeOnce
+        appDrivenAnimation = config.appDrivenAnimation
 
         if let code = config.hyperkeyCode, let name = KeyNames.keyName(for: code) {
             hyperkeyOption = name
@@ -163,6 +171,10 @@ class SettingsViewModel: ObservableObject {
         config.forceProMotion = forceProMotion
         config.dimUnfocused = dimUnfocused
         config.niriColumnWidth = niriColumnWidth
+        config.niriColumnStack = niriColumnStack
+        config.niriFillScreen = niriFillScreen
+        config.sizeOnce = sizeOnce
+        config.appDrivenAnimation = appDrivenAnimation
 
         if hyperkeyOption == "disabled" {
             config.hyperkeyCode = nil
@@ -234,6 +246,8 @@ class SettingsViewModel: ObservableObject {
             || oldConfig.singleWindowPadding != config.singleWindowPadding
             || oldConfig.tilingMode != config.tilingMode
             || oldConfig.niriColumnWidth != config.niriColumnWidth
+            || oldConfig.niriColumnStack != config.niriColumnStack
+            || oldConfig.niriFillScreen != config.niriFillScreen
 
         if needsRetile {
             wm.retile()
