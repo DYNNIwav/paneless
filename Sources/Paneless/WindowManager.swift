@@ -643,6 +643,61 @@ class WindowManager: WindowObserverDelegate {
 
     /// Retile with a scale-in effect for a newly created window.
     /// Avoids redundant AX getFrame calls by using calculated start frames directly.
+    /// Get a new window out of sight, let it resize there, then bring the layout in
+    /// with a single animation.
+    ///
+    /// The costly half of placing a new window is the app re-laying its content out at a
+    /// size it has never had, up to 53ms a call on a heavy app, and that is what looked
+    /// like lag. A window cannot be hidden, but it can be moved for 0.2-2ms, so the
+    /// resize happens off-screen and only the arrival is seen.
+    ///
+    /// Everything happens in ONE animation pass. An earlier attempt ran a second
+    /// `animate` for the reveal, which cancelled the first mid-flight and left the
+    /// neighbours stranded at interpolated positions, overlapping each other.
+    private func parkThenReveal(_ windowID: CGWindowID, element: AXUIElement) {
+        let screenFrame = screenFrameInAX(for: NSScreen.safeMain)
+        guard let current = AccessibilityBridge.getFrame(of: element) else {
+            retileWithScaleIn(newWindowID: windowID); return
+        }
+
+        // Out of sight, keeping its own size for now so nothing is clamped oddly.
+        let parked = WorkspaceManager.shared.calculateHiddenPosition(
+            screenFrame: screenFrame, originalSize: current.size)
+        AccessibilityBridge.setFrameDuringAnimation(of: element, to: parked, setSize: false)
+
+        // Work out where it will end up, without touching anything yet.
+        let windows = layoutEngine.tiledWindows
+        let region = getTilingRegion()
+        let frames = NativeTiling.calculateFrames(
+            count: windows.count, region: region, gap: config.innerGap,
+            singleWindowPadding: config.singleWindowPadding,
+            splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant)
+        guard let idx = windows.firstIndex(of: windowID), idx < frames.count else {
+            retileWithScaleIn(newWindowID: windowID); return
+        }
+        let target = frames[idx]
+
+        // The expensive call, made where it cannot be seen.
+        AccessibilityBridge.setFrameDuringAnimation(
+            of: element, to: CGRect(origin: parked.origin, size: target.size))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self = self,
+                  self.trackedWindows[windowID] != nil,
+                  self.layoutEngine.tiledWindows.contains(windowID),
+                  let el = self.axElements[windowID] else { return }
+
+            // Step in from the nearest edge, so the travel is short and horizontal.
+            let fromLeft = target.midX < screenFrame.midX
+            let entry = CGRect(x: fromLeft ? screenFrame.minX - target.width : screenFrame.maxX,
+                               y: target.origin.y, width: target.width, height: target.height)
+            AccessibilityBridge.setFrameDuringAnimation(of: el, to: entry, setSize: false)
+
+            // One pass for everything, so nothing gets cancelled halfway.
+            self.retileWithScaleIn(newWindowID: windowID)
+        }
+    }
+
     private func retileWithScaleIn(newWindowID: CGWindowID) {
         if config.niriMode {
             retileNiriWithScaleIn(newWindowID: newWindowID)
@@ -1032,9 +1087,11 @@ class WindowManager: WindowObserverDelegate {
             let conn = CGSMainConnectionID()
             CGSSetWindowAlpha(conn, windowID, 0.0)
 
-            // Hyprland-style scale-in: calculate 87% centered start frame for the new window.
-            // The GPU Animator will handle the scale-up + fade-in from center.
-            retileWithScaleIn(newWindowID: windowID)
+            if config.revealWhenReady, let element = axElements[windowID] {
+                parkThenReveal(windowID, element: element)
+            } else {
+                retileWithScaleIn(newWindowID: windowID)
+            }
         } else {
             trackedWindows.removeValue(forKey: windowID)
             restoreWindowAlpha(windowID)
