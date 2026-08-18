@@ -3,43 +3,37 @@ import CoreVideo
 
 /// Window animation engine.
 ///
-/// On macOS Tahoe+, SLSSetWindowTransform works for SCALE transforms
-/// (popin/close effects) but not for pure TRANSLATION (window moves).
-/// So we use compositor scale+fade for open/close, and instant atomic
-/// batchSetFrames for position moves.
+/// Everything here goes through the Accessibility API, because that is the only
+/// thing that works. Measured on macOS Tahoe with a controlled two-process test:
+/// SLSSetWindowTransform and CGSSetWindowAlpha both return CGError 0 and do
+/// nothing at all when the target window belongs to another process. They only
+/// affect windows we own ourselves. This file used to claim the opposite and the
+/// popin, popout and alpha pre-hide effects were all built on it, so none of them
+/// ever ran. Do not add a compositor path back without measuring it first.
+///
+/// yabai gets a real GPU animation by capturing the window, animating its own
+/// proxy, and asking Dock.app to hide the real one. That last step needs SIP
+/// partially disabled, and capturing window pixels at all costs the Screen
+/// Recording permission plus a permanently lit recording indicator, so neither
+/// is available to us.
 class Animator: NSObject {
     static let shared = Animator()
 
     var enabled: Bool = true
 
-    private var animationTimer: DispatchSourceTimer?
-    private var activeTransitions: [Transition] = []
-    private var animationStartTime: CFTimeInterval = 0
     private var isAnimating = false
     private let conn = CGSMainConnectionID()
 
     // Close animation state
-    private var closingWindowID: CGWindowID?
-    private var closingFrame: CGRect = .zero
-    private var closeCompletion: (() -> Void)?
 
-    /// Whether SLSSetWindowTransform is available (checked once at startup)
-    private let hasGPUTransform: Bool = {
-        return dlsym(dlopen(nil, RTLD_LAZY), "SLSSetWindowTransform") != nil
-    }()
 
     // MARK: - Hyprland Animation Curves & Timing
 
     /// Hyprland's "default" bezier: (0.25, 1, 0.5, 1) — smooth ease-out
     private let easeOut = BezierCurve(p1x: 0.25, p1y: 1.0, p2x: 0.5, p2y: 1.0)
 
-    /// Hyprland's almostLinear: bezier(0.5, 0.5, 0.75, 1.0)
-    private let almostLinear = BezierCurve(p1x: 0.5, p1y: 0.5, p2x: 0.75, p2y: 1.0)
 
     // Hyprland default durations & scale
-    private let windowOpenDuration: CFTimeInterval = 0.5     // popin 80%
-    private let windowCloseDuration: CFTimeInterval = 0.2     // popout 80%
-    private let popinScale: CGFloat = 0.80                    // Hyprland default: popin 80%
     /// Matches what macOS's own tiling takes (measured 330ms for TextEdit, 355ms for Safari).
     private let windowMoveDuration: CFTimeInterval = 0.33
 
@@ -85,7 +79,6 @@ class Animator: NSObject {
     // MARK: - Public API
 
     // Delayed popin state
-    private var pendingPopinWork: DispatchWorkItem?
 
     /// Move windows to their target positions.
     /// Position moves are instant (atomic batchSetFrames).
@@ -333,147 +326,15 @@ class Animator: NSObject {
         startGlide(steps, targets: targets, pids: pids)
     }
 
-    // MARK: - Popin Animation (new window: scale 87%→100% + fade in)
-
-    private var currentDuration: CFTimeInterval = 0
-
-    private func tickPopin() {
-        guard isAnimating else { return }
-
-        let elapsed = CACurrentMediaTime() - animationStartTime
-        let linear = min(CGFloat(elapsed / currentDuration), 1.0)
-        let t = easeOut.evaluate(linear)
-
-        SLSDisableUpdate(conn)
-
-        if linear >= 1.0 {
-            for tr in activeTransitions {
-                SLSSetWindowTransform(conn, tr.windowID, .identity)
-                CGSSetWindowAlpha(conn, tr.windowID, 1.0)
-            }
-            SLSReenableUpdate(conn)
-            finishAnimation()
-            return
-        }
-
-        // Scale: popinScale → 1.0, alpha: 0 → 1
-        let growth = 1.0 - popinScale  // 0.20 for 80% popin
-        for tr in activeTransitions {
-            let scale = popinScale + growth * t  // 0.80 → 1.0
-            let tx = tr.targetFrame.width * (1.0 - scale) / 2.0
-            let ty = tr.targetFrame.height * (1.0 - scale) / 2.0
-            SLSSetWindowTransform(conn, tr.windowID,
-                CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: tx, ty: ty))
-            CGSSetWindowAlpha(conn, tr.windowID, Float(t))
-        }
-        SLSReenableUpdate(conn)
-    }
-
-    // MARK: - Close Animation (popout: scale 100%→87% + fade out)
-
-    private func tickClose() {
-        guard isAnimating else { return }
-
-        let elapsed = CACurrentMediaTime() - animationStartTime
-        let linear = min(CGFloat(elapsed / currentDuration), 1.0)
-        let t = almostLinear.evaluate(linear)
-
-        SLSDisableUpdate(conn)
-
-        if linear >= 1.0 {
-            if let closingWID = closingWindowID {
-                SLSSetWindowTransform(conn, closingWID, .identity)
-                CGSSetWindowAlpha(conn, closingWID, 0.0)
-            }
-            SLSReenableUpdate(conn)
-
-            let cb = self.closeCompletion
-            finishAnimation()
-            closingWindowID = nil
-            closingFrame = .zero
-            closeCompletion = nil
-            cb?()
-            return
-        }
-
-        // Scale: 1.0 → popinScale (80%), alpha: 1 → 0
-        if let closingWID = closingWindowID {
-            let shrink = 1.0 - popinScale  // 0.20
-            let scale = 1.0 - (shrink * t)  // 1.0 → 0.80
-            let alpha = Float(1.0 - t)
-            let tx = closingFrame.width * (1.0 - scale) / 2.0
-            let ty = closingFrame.height * (1.0 - scale) / 2.0
-            SLSSetWindowTransform(conn, closingWID,
-                CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: tx, ty: ty))
-            CGSSetWindowAlpha(conn, closingWID, alpha)
-        }
-        SLSReenableUpdate(conn)
-    }
-
-    // MARK: - Timer
-
-    private func startTimer(duration: CFTimeInterval, tick: @escaping () -> Void) {
-        currentDuration = duration
-        animationStartTime = CACurrentMediaTime()
-        isAnimating = true
-
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(8))
-        timer.setEventHandler { tick() }
-        animationTimer = timer
-        timer.resume()
-    }
-
     // MARK: - Cleanup
 
-    private func finishAnimation() {
-        animationTimer?.cancel()
-        animationTimer = nil
-        activeTransitions.removeAll()
-        isAnimating = false
-    }
-
     func cancelAll() {
-        // Cancel pending delayed popin
-        pendingPopinWork?.cancel()
-        pendingPopinWork = nil
-
         // Stop any frame glide. Don't commit: whoever cancelled is about to set
         // its own targets, and committing here would fight them.
         if displayLink != nil || !glides.isEmpty {
             finishGlide()
         }
-
-        if isAnimating {
-            if hasGPUTransform {
-                SLSDisableUpdate(conn)
-                for t in activeTransitions {
-                    SLSSetWindowTransform(conn, t.windowID, .identity)
-                    CGSSetWindowAlpha(conn, t.windowID, 1.0)
-                }
-                if let closingWID = closingWindowID {
-                    SLSSetWindowTransform(conn, closingWID, .identity)
-                    CGSSetWindowAlpha(conn, closingWID, 1.0)
-                }
-                SLSReenableUpdate(conn)
-            }
-        }
-        animationTimer?.cancel()
-        animationTimer = nil
-        activeTransitions.removeAll()
-        if let cb = closeCompletion { cb() }
-        closingWindowID = nil
-        closingFrame = .zero
-        closeCompletion = nil
         isAnimating = false
     }
 
-    func resetTransforms(for windowIDs: [CGWindowID]) {
-        guard hasGPUTransform else { return }
-        SLSDisableUpdate(conn)
-        for wid in windowIDs {
-            SLSSetWindowTransform(conn, wid, .identity)
-        }
-        SLSReenableUpdate(conn)
-    }
 }

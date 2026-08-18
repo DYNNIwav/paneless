@@ -107,10 +107,6 @@ class WindowManager: WindowObserverDelegate {
         // Reset any stale alpha/brightness from previous crash or failed dimming attempts
         restoreAllDimming()
 
-        // Reset any stale CGS transforms from a previous crash mid-animation
-        let allWindowIDs = SpaceManager.getWindowsOnCurrentSpace()
-        Animator.shared.resetTransforms(for: allWindowIDs)
-
         // Initialize virtual workspace 1 with the scanned windows
         let screen = NSScreen.safeMain
         let monitorID = WorkspaceManager.shared.screenID(for: screen)
