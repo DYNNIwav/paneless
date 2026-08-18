@@ -1007,9 +1007,18 @@ class WindowManager: WindowObserverDelegate {
         }
     }
 
+    /// An AX element somewhere died. If it is one of the windows we track, tear it
+    /// down now rather than waiting for the poll to notice. The poll runs every 3s
+    /// once idle, which is far too late for anything keyed off `lastWindowDestroyedAt`.
+    func axElementDestroyed(element: AXUIElement) {
+        guard let windowID = axElements.first(where: { CFEqual($0.value, element) })?.key else { return }
+        windowDestroyed(windowID: windowID)
+    }
+
     func windowDestroyed(windowID: CGWindowID) {
         guard trackedWindows[windowID] != nil else { return }
 
+        panelessLog("Window destroyed: \(windowID)")
         lastWindowDestroyedAt = Date()
 
         // Clean up minimized state
@@ -1202,9 +1211,21 @@ class WindowManager: WindowObserverDelegate {
 
         // Don't follow app activation that was triggered by closing the last window:
         // macOS then activates the next app in Z-order, which may live on another
-        // workspace. We detect that case by a window having just been destroyed, rather
-        // than blocking all activations on an empty workspace (which would prevent a
-        // genuine Raycast/Cmd-Tab activation from summoning a window here).
+        // workspace, and summoning it would drag that window out of its workspace.
+        //
+        // Ask state, not the clock. The window we held focus on answers immediately
+        // once it is gone, so this is decided correctly however the notification and
+        // the destroy happen to be ordered. The old check compared against
+        // `lastWindowDestroyedAt`, which is written by the poll and so can still be
+        // seconds stale at the moment this activation arrives.
+        if let focused = focusedWindowID,
+           let element = axElements[focused],
+           !AccessibilityBridge.isAlive(element) {
+            panelessLog("Focus-follows-app: suppressed (focused window died)")
+            windowDestroyed(windowID: focused)
+            return
+        }
+
         if Date().timeIntervalSince(lastWindowDestroyedAt) < 0.4 {
             panelessLog("Focus-follows-app: suppressed (window closed <400ms ago)")
             return

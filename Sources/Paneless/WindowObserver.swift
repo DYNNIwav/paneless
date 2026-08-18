@@ -9,6 +9,7 @@ protocol WindowObserverDelegate: AnyObject {
     func applicationLaunched(pid: pid_t, name: String)
     func applicationTerminated(pid: pid_t, name: String)
     func applicationActivated(pid: pid_t, name: String)
+    func axElementDestroyed(element: AXUIElement)
 }
 
 class WindowObserver {
@@ -376,6 +377,13 @@ private func axObserverCallback(
             } else {
                 windowObserver.delegate?.focusChanged()
             }
+        }
+
+        // Report destroyed elements directly. CGWindowList still lists a window for
+        // a while after the app tears it down, so the poll below cannot see this yet;
+        // the delegate matches the element against the windows it tracks instead.
+        if notifName == kAXUIElementDestroyedNotification as String {
+            windowObserver.delegate?.axElementDestroyed(element: element)
         }
 
         windowObserver.triggerPoll()
