@@ -519,7 +519,8 @@ class WindowManager: WindowObserverDelegate {
             Animator.shared.animateWithClose(
                 redistributeTransitions: transitions,
                 closingWindowID: windowID,
-                closingFrame: closingFrame
+                closingFrame: closingFrame,
+                closingElement: element
             ) { [weak self] in
                 AccessibilityBridge.close(window: element)
                 // Restore alpha in case the window survives (e.g. "Save?" dialog)
@@ -1146,8 +1147,6 @@ class WindowManager: WindowObserverDelegate {
         let wasTiled = layoutEngine.contains(windowID)
         if wasTiled {
             layoutEngine.remove(windowID: windowID)
-            // In Niri mode, tiledWindows was already synced by removeWindowFromColumns
-            retile()
         }
 
         // Always try to focus a remaining tiled window after a tiled window is destroyed.
@@ -1155,6 +1154,13 @@ class WindowManager: WindowObserverDelegate {
         // (e.g. Ghostty/Arc with windows on other spaces), even if the destroyed
         // window wasn't tracked as focusedWindowID (Cmd+W bypass).
         if wasTiled {
+            // Choose the new focus BEFORE retiling, not after.
+            //
+            // Moving a window to another workspace already did it in this order and
+            // animates cleanly; closing did it the other way round and did not. Focusing
+            // a window mid-animation makes macOS raise and nudge it, which landed as a
+            // single 265px lurch in the middle of an otherwise even sequence of ~50px
+            // steps: the hop you see before the animation appears to start.
             // Check if current focus is still on the destroyed window's app
             // and that app has no more tiled windows on this space.
             let appStillTiled = layoutEngine.tiledWindows.contains { tid in
@@ -1183,6 +1189,9 @@ class WindowManager: WindowObserverDelegate {
                     }
                 }
             }
+
+            // Now, and only now, move everything. One pass, nothing interrupting it.
+            retile()
 
             let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
             updateBorders(layouts: layouts)

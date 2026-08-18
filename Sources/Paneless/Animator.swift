@@ -54,7 +54,12 @@ class Animator: NSObject {
     }
 
     /// How far apart to start successive windows in one reflow.
-    private let staggerStep: TimeInterval = 0.025
+    ///
+    /// Zero: they move as one. A cascade was tried and it does read as choreographed,
+    /// but windows sharing an edge then visibly slide out of step with each other, and
+    /// the thing that makes a tiling layout feel solid is that neighbours behave as if
+    /// they are pushing one another rather than each going its own way.
+    private let staggerStep: TimeInterval = 0
 
     /// How long a new window waits before entering. The windows already on screen move
     /// aside first and the newcomer drops into the space they opened, rather than the
@@ -404,12 +409,37 @@ class Animator: NSObject {
         redistributeTransitions: [Transition],
         closingWindowID: CGWindowID,
         closingFrame: CGRect,
+        closingElement: AXUIElement? = nil,
         completion: @escaping () -> Void
     ) {
         cancelAll()
 
-        // Close first so the gap is real before anything moves into it.
-        completion()
+        // Shrink the window before it goes, when we are the ones closing it.
+        //
+        // Only possible on Paneless's own close binding: a window closed with Cmd+W is
+        // gone by the time we hear about it, and intercepting Cmd+W is not an option
+        // because in a browser it closes a tab rather than a window. Scaling would be
+        // the natural way to do this and is not available to us, so the frame itself is
+        // stepped down. It is a handful of resizes on a window that is about to cease
+        // existing, so the usual cost of a resize does not matter here.
+        if enabled, let element = closingElement, closingFrame.width > 1 {
+            let steps = 6
+            let duration = 0.11
+            for i in 1...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let scale = 1.0 - 0.22 * t
+                let w = closingFrame.width * scale, h = closingFrame.height * scale
+                let rect = CGRect(x: closingFrame.midX - w / 2, y: closingFrame.midY - h / 2,
+                                  width: w, height: h)
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration * Double(i) / Double(steps)) {
+                    AccessibilityBridge.setFrameDuringAnimation(of: element, to: rect)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { completion() }
+        } else {
+            // Close first so the gap is real before anything moves into it.
+            completion()
+        }
 
         guard enabled, !redistributeTransitions.isEmpty else {
             if !redistributeTransitions.isEmpty {
