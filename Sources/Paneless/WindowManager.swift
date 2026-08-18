@@ -1473,15 +1473,12 @@ class WindowManager: WindowObserverDelegate {
 
     /// Core Niri retile: calculate column frames, animate visible windows, hide off-screen ones.
     private func retileNiri(animated: Bool = true) {
-        // Rebuild the columns if they are missing but windows are not.
-        //
-        // Columns are saved and restored per workspace, but they are only ever built
-        // while niri mode is active. Turning the mode on leaves every workspace holding
-        // windows and no columns, so this placed nothing at all and left every window
-        // parked off-screen, which looks exactly like the windows having been lost.
-        if layoutEngine.niriColumns.isEmpty && !layoutEngine.tiledWindows.isEmpty {
-            layoutEngine.rebuildColumnsFromTiledWindows()
-        }
+        // Keep the columns in step with the window list before placing anything.
+        // A window can be in the list while no column knows about it: turning niri mode
+        // on does that to every workspace at once, and moving a window in from another
+        // workspace does it to one. Either way the window is never placed and stays
+        // parked off-screen, which looks like it has vanished.
+        layoutEngine.reconcileColumns()
 
         let region = getTilingRegion()
         let results = NativeTiling.calculateNiriFrames(

@@ -142,6 +142,33 @@ class LayoutEngine {
         niriColumns = tiledWindows.map { NiriColumn(windows: [$0]) }
     }
 
+    /// Bring the columns back in step with the window list without flattening them.
+    ///
+    /// A window can end up in `tiledWindows` while no column knows about it: moving one
+    /// in from another workspace does exactly that. It is then never placed and simply
+    /// stays parked off-screen, which looks like the window vanishing. Rebuilding from
+    /// scratch would fix it but would also throw away every column the user has built up
+    /// with consume, so add and drop only what actually differs.
+    func reconcileColumns() {
+        let live = Set(tiledWindows)
+
+        for i in niriColumns.indices {
+            niriColumns[i].windows.removeAll { !live.contains($0) }
+        }
+        niriColumns.removeAll { $0.windows.isEmpty }
+
+        let known = Set(niriColumns.flatMap { $0.windows })
+        for wid in tiledWindows where !known.contains(wid) {
+            niriColumns.append(NiriColumn(windows: [wid]))
+        }
+
+        if niriColumns.isEmpty {
+            niriActiveColumn = 0
+        } else {
+            niriActiveColumn = max(0, min(niriActiveColumn, niriColumns.count - 1))
+        }
+    }
+
     /// Find which column and row a window is in.
     func findWindowInColumns(_ windowID: CGWindowID) -> (col: Int, row: Int)? {
         for (ci, col) in niriColumns.enumerated() {
