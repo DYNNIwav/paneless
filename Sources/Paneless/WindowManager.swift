@@ -211,6 +211,8 @@ class WindowManager: WindowObserverDelegate {
         case .setMark(let key):             setWindowMark(key)
         case .jumpToMark(let key):          jumpToWindowMark(key)
         case .niriConsume:                  niriConsume()
+        case .niriMoveColumnLeft:           niriMoveColumn(right: false)
+        case .niriMoveColumnRight:          niriMoveColumn(right: true)
         case .niriMoveLeft:                 niriMoveFocused(right: false)
         case .niriMoveRight:                niriMoveFocused(right: true)
         case .niriExpel:                    niriExpel()
@@ -1785,6 +1787,27 @@ class WindowManager: WindowObserverDelegate {
     }
 
     /// Consume: take the first window from the right column and append to the current column.
+    /// Move the whole focused column one place along the strip.
+    ///
+    /// This is niri's move-column-left/right, and it is the one that reorders without
+    /// rearranging: the column keeps whatever windows it holds and simply swaps place
+    /// with its neighbour. Distinct from niri_move_left/right, which take a single
+    /// window out of its column or into the next one.
+    private func niriMoveColumn(right: Bool) {
+        guard config.niriMode else { return }
+        let ci = layoutEngine.niriActiveColumn
+        guard ci >= 0 && ci < layoutEngine.niriColumns.count else { return }
+        let target = right ? ci + 1 : ci - 1
+        guard target >= 0 && target < layoutEngine.niriColumns.count else { return }
+
+        layoutEngine.niriColumns.swapAt(ci, target)
+        layoutEngine.niriActiveColumn = target
+        layoutEngine.syncTiledWindowsFromColumns()
+        retileNiri()
+        onFocusChange?()
+        panelessLog("Niri move column \(right ? "right" : "left")")
+    }
+
     /// Move the focused window one step sideways, merging or splitting as needed.
     ///
     /// This is niri's `consume-or-expel-window-left/right`, and it is what niri puts on

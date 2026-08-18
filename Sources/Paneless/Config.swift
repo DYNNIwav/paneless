@@ -448,6 +448,8 @@ struct PanelessConfig {
         case "niri_expel": return .niriExpel
         case "niri_move_left": return .niriMoveLeft
         case "niri_move_right": return .niriMoveRight
+        case "niri_move_column_left": return .niriMoveColumnLeft
+        case "niri_move_column_right": return .niriMoveColumnRight
         default: return nil
         }
     }
@@ -488,6 +490,8 @@ struct PanelessConfig {
         case .minimizeToWorkspace: return "minimize"
         case .setMark(let key): return "set_mark \(key)"
         case .jumpToMark(let key): return "jump_mark \(key)"
+        case .niriMoveColumnLeft: return "niri_move_column_left"
+        case .niriMoveColumnRight: return "niri_move_column_right"
         case .niriMoveLeft: return "niri_move_left"
         case .niriMoveRight: return "niri_move_right"
         case .niriConsume: return "niri_consume"

@@ -87,6 +87,8 @@ enum WMAction {
     case niriExpel
     case niriMoveLeft
     case niriMoveRight
+    case niriMoveColumnLeft
+    case niriMoveColumnRight
 }
 
 struct TilingRegion {
