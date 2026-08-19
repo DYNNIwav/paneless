@@ -93,7 +93,16 @@ struct GeneralTab: View {
                 Toggle("Resize in one step", isOn: $viewModel.sizeOnce)
                 SettingDescription(text: "Take the final size at once and animate only the movement. A resize costs up to 50ms on a heavy app against 2ms for a move, so this keeps the frame rate up at the cost of the size snapping.")
 
-                Toggle("Let apps animate themselves", isOn: $viewModel.appDrivenAnimation)
+                Picker("Who animates a move", selection: $viewModel.appDrivenAnimation) {
+                    Text("Paneless").tag("off")
+                    Text("The app, when only moving").tag("moves")
+                    Text("The app, always").tag("always")
+                }
+                SettingDescription(text: viewModel.appDrivenAnimation == "off"
+                    ? "Paneless writes every frame itself. Even pacing, but each frame is a separate message to each app, and one busy app delays the others."
+                    : (viewModel.appDrivenAnimation == "moves"
+                        ? "A move is handed to the app, which animates it at around 110fps from a single message. Anything that also resizes stays with Paneless, since apps snap size rather than ease it."
+                        : "Everything is handed to the app. Smoothest for movement, but sizes jump instead of growing."))
                 SettingDescription(text: "Hand each app its destination once and let it run its own animation. Fewer messages and no cost to Paneless, but the pacing is less even and the curve is the system's rather than ours.")
                 SettingDescription(text: "Use the built-in macOS window tiling animation instead of GPU transforms. Incompatible with gaps.")
             } header: {

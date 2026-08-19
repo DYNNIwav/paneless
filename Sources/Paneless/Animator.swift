@@ -24,7 +24,7 @@ class Animator: NSObject {
     /// See Config.sizeOnce.
     var sizeOnce: Bool = false
     /// See Config.appDrivenAnimation.
-    var appDrivenAnimation: Bool = false
+    var appDrivenAnimation: String = "moves"
 
     /// Called with true when an animation starts and false when the last one ends.
     /// Lets the owner run the ProMotion keepalive only while it is worth anything.
@@ -225,7 +225,8 @@ class Animator: NSObject {
         // exactly what is wanted: 110fps from a single round trip per application instead
         // of a synchronous write per window per frame, on a main thread that has to reach
         // every other window in the same 8.33ms.
-        if appDrivenAnimation || steps.allSatisfy({ $0.moveOnly }) {
+        if appDrivenAnimation == "always"
+            || (appDrivenAnimation == "moves" && steps.allSatisfy { $0.moveOnly }) {
             startAppDrivenAnimation(steps, pids: pids)
         } else {
             startGlide(steps, targets: targets, pids: pids)

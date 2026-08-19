@@ -31,7 +31,11 @@ struct PanelessConfig {
     /// makes the app produce 22-27 frames over ~225ms on its own, Safari included, for
     /// a single IPC round trip. The animation is then AppKit's spring rather than our
     /// bezier, and position animates while size still snaps.
-    var appDrivenAnimation: Bool = false
+    /// Who animates a window's movement: "off" for our own frame-by-frame glide,
+    /// "moves" to hand a pure move to the application itself, "always" to hand it
+    /// everything. Applications ease position well and snap size, which is why "moves"
+    /// is the default rather than "always".
+    var appDrivenAnimation: String = "moves"
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false
@@ -231,7 +235,12 @@ struct PanelessConfig {
                 case "native_animation": config.nativeAnimation = value == "true" || value == "1"
                 case "animations": config.animations = value != "false" && value != "0"
                 case "size_once": config.sizeOnce = value == "true" || value == "1"
-                case "app_driven_animation": config.appDrivenAnimation = value == "true" || value == "1"
+                case "app_driven_animation":
+                    switch value {
+                    case "true", "1", "always": config.appDrivenAnimation = "always"
+                    case "false", "0", "off":   config.appDrivenAnimation = "off"
+                    default:                    config.appDrivenAnimation = "moves"
+                    }
                 case "force_promotion": config.forceProMotion = value == "true" || value == "1"
                 case "tiling_mode":
                     let mode = value.lowercased()
