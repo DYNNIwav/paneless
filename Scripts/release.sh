@@ -78,6 +78,15 @@ zip -r /tmp/Paneless.app.zip Paneless.app
 SHA=$(shasum -a 256 /tmp/Paneless.app.zip | awk '{print $1}')
 echo "==> SHA256: $SHA"
 
+# Commit the version stamp so the tag GitHub creates points at the source that
+# was actually built. Without this the tag carries the old version number while
+# the shipped binary reports the new one.
+if ! git diff --quiet Resources/Info.plist; then
+  git add Resources/Info.plist
+  git commit -m "Release $VERSION"
+  git push origin HEAD
+fi
+
 echo "==> Uploading release $VERSION..."
 gh release delete "$VERSION" --yes 2>/dev/null || true
 gh release create "$VERSION" /tmp/Paneless.app.zip \
