@@ -2278,6 +2278,16 @@ class WindowManager: WindowObserverDelegate {
         for oldID in orphanedIDs where oldID != targetID {
             wsMgr.migrateMonitor(from: oldID, to: targetID)
             wsMgr.activeWorkspace.removeValue(forKey: oldID)
+
+            // Fold the lost display's layout into the one we are keeping. Its windows are
+            // on the surviving screen now, and a layout keyed to a display that is gone
+            // would never be laid out again, so they would be left loose on the desktop.
+            guard let orphan = layoutEngines.removeValue(forKey: oldID) else { continue }
+            let survivor = engine(for: targetID)
+            for wid in orphan.tiledWindows where !survivor.contains(wid) {
+                survivor.insert(windowID: wid, afterFocused: nil)
+                if config.niriMode { survivor.insertWindowAsNewColumn(wid) }
+            }
         }
         wsMgr.activeWorkspace[targetID] = oldActive
 
