@@ -3,6 +3,10 @@ import Cocoa
 /// Simple ordered window list layout engine.
 /// Replaces BSP tree with direct frame calculation for 1-4 windows.
 class LayoutEngine {
+    /// Which display this layout belongs to. One engine per screen, so the region a
+    /// layout is drawn into can be looked up from the layout itself rather than threaded
+    /// through every call.
+    let monitorID: String
     var tiledWindows: [CGWindowID] = []
     var config: PanelessConfig
     var layoutVariant: Int = 0
@@ -15,8 +19,9 @@ class LayoutEngine {
     /// when the focused column would otherwise be off-screen.
     var niriScrollOffset: CGFloat = 0
 
-    init(config: PanelessConfig) {
+    init(config: PanelessConfig, monitorID: String = "") {
         self.config = config
+        self.monitorID = monitorID
     }
 
     func cycleVariant() {

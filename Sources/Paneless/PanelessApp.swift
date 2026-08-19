@@ -514,6 +514,8 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             # window along. h and l are horizontal, j and k vertical.
             alt, h = focus_prev
             alt, l = focus_next
+            alt, j = focus_down
+            alt, k = focus_up
             alt+shift, h = rotate_prev
             alt+shift, l = rotate_next
             # Vertical order within a niri column.

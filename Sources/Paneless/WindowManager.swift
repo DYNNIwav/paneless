@@ -4,7 +4,65 @@ class WindowManager: WindowObserverDelegate {
     static let shared = WindowManager()
 
     var config: PanelessConfig
-    let layoutEngine: LayoutEngine
+    /// One layout per screen, the way each output in niri and Hyprland carries its own.
+    ///
+    /// Everything a keybinding does belongs to the screen you are looking at, and that is
+    /// what `layoutEngine` hands back. The places that have to touch every screen ask for
+    /// them by id instead. There used to be a single engine and a single tiling region, so
+    /// with two displays connected every tiled window was laid out on whichever one was
+    /// main, and moving focus across dragged the whole set after it.
+    private var layoutEngines: [String: LayoutEngine] = [:]
+
+    /// The screen the keyboard is on.
+    var currentMonitorID: String {
+        WorkspaceManager.shared.screenID(for: NSScreen.safeMain)
+    }
+
+    /// The layout belonging to the screen the keyboard is on.
+    var layoutEngine: LayoutEngine { engine(for: currentMonitorID) }
+
+    func engine(for monitorID: String) -> LayoutEngine {
+        if let existing = layoutEngines[monitorID] { return existing }
+        let created = LayoutEngine(config: config, monitorID: monitorID)
+        layoutEngines[monitorID] = created
+        return created
+    }
+
+    /// The tiling region belonging to a layout's own screen.
+    func region(for engine: LayoutEngine) -> TilingRegion {
+        let screen = NSScreen.screens.first {
+            WorkspaceManager.shared.screenID(for: $0) == engine.monitorID
+        }
+        return getTilingRegion(for: screen)
+    }
+
+    /// The layout for the screen a window is physically sitting on.
+    ///
+    /// A window belongs to the display it is on, not to the display that happened to have
+    /// the keyboard when it opened, which is what decided it before.
+    func engine(forWindow wid: CGWindowID) -> LayoutEngine {
+        guard let element = axElements[wid],
+              let frame = AccessibilityBridge.getFrame(of: element),
+              let screen = SpaceManager.screen(containing: CGPoint(x: frame.midX, y: frame.midY))
+        else { return layoutEngine }
+        return engine(for: WorkspaceManager.shared.screenID(for: screen))
+    }
+
+    /// The layout currently holding a window, wherever it ended up.
+    func engineHolding(_ wid: CGWindowID) -> LayoutEngine? {
+        layoutEngines.values.first {
+            $0.tiledWindows.contains(wid) || $0.findWindowInColumns(wid) != nil
+        }
+    }
+
+    /// Take a window out of every layout. Used when it is destroyed or floated, where
+    /// leaving a stale id behind in another screen's list would strand a gap there.
+    func removeFromAllEngines(_ wid: CGWindowID) {
+        for engine in layoutEngines.values {
+            engine.removeWindowFromColumns(wid)
+            engine.remove(windowID: wid)
+        }
+    }
     let observer: WindowObserver
     let eventTap: EventTap
 
@@ -80,7 +138,6 @@ class WindowManager: WindowObserverDelegate {
 
     private init() {
         self.config = PanelessConfig.load()
-        self.layoutEngine = LayoutEngine(config: config)
         self.observer = WindowObserver()
         self.eventTap = EventTap()
     }
@@ -336,6 +393,19 @@ class WindowManager: WindowObserverDelegate {
             height: currentFrame.height
         )
         AccessibilityBridge.setFrame(of: element, to: newFrame)
+
+        // Hand the window over to the other display's layout. Placing it on the screen was
+        // all this did, so the window stayed in the layout it came from and the next
+        // retile pulled it straight back where it had been.
+        guard !floatingWindows.contains(windowID) else { return }
+        if let source = engineHolding(windowID) {
+            source.removeWindowFromColumns(windowID)
+            source.remove(windowID: windowID)
+        }
+        let target = engine(for: WorkspaceManager.shared.screenID(for: targetScreen))
+        target.insert(windowID: windowID, afterFocused: nil)
+        if config.niriMode { target.insertWindowAsNewColumn(windowID) }
+        retile()
     }
 
     // MARK: - Swap / Layout
@@ -551,7 +621,7 @@ class WindowManager: WindowObserverDelegate {
         }
         let oldMode = config.tilingMode
         config = PanelessConfig.load()
-        layoutEngine.config = config
+        for engine in layoutEngines.values { engine.config = config }
 
         // Reset Niri state if mode changed
         if config.tilingMode != oldMode {
@@ -597,26 +667,41 @@ class WindowManager: WindowObserverDelegate {
 
     // MARK: - Tiling
 
+    /// Lay out every screen. Each display carries its own layout, so this runs once per
+    /// screen and the overlays are refreshed once at the end, with every screen's frames
+    /// together: they are global, and updating them per screen would leave only the last
+    /// screen's windows accounted for.
     func retile(animated: Bool = true) {
+        var layouts: [(CGWindowID, CGRect)] = []
+        for screen in NSScreen.screens {
+            let monitorID = WorkspaceManager.shared.screenID(for: screen)
+            layouts += retile(engine: engine(for: monitorID), animated: animated)
+        }
+        updateBorders(layouts: layouts)
+        updateDimming(layouts: layouts)
+    }
+
+    /// Lay out one screen, and hand back the frames it placed.
+    @discardableResult
+    private func retile(engine: LayoutEngine, animated: Bool) -> [(CGWindowID, CGRect)] {
         if config.niriMode {
-            retileNiri(animated: animated)
-            return
+            return retileNiri(engine: engine, animated: animated)
         }
 
-        let windows = layoutEngine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
+        let windows = engine.tiledWindows.compactMap { wid -> (windowID: CGWindowID, element: AXUIElement, pid: pid_t)? in
             guard let el = axElements[wid], let t = trackedWindows[wid] else { return nil }
             return (wid, el, t.pid)
         }
 
-        let region = getTilingRegion()
+        let region = region(for: engine)
 
         // Native macOS compositor tiling: GPU-driven animation, no content redraw.
-        // Only used when explicitly enabled — incompatible with gaps.
+        // Only used when explicitly enabled, and it is incompatible with gaps.
         if config.nativeAnimation &&
-           NativeTiling.canUseMenuTiling(count: windows.count, splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant) {
+           NativeTiling.canUseMenuTiling(count: windows.count, splitRatio: engine.splitRatio, variant: engine.layoutVariant) {
             let menuSuccess = NativeTiling.applyViaMenu(
                 windows: windows,
-                variant: layoutEngine.layoutVariant
+                variant: engine.layoutVariant
             )
 
             if menuSuccess {
@@ -633,7 +718,7 @@ class WindowManager: WindowObserverDelegate {
                 NativeTiling.applyLayout(
                     windows: windows, region: region, gap: config.innerGap,
                     singleWindowPadding: config.singleWindowPadding,
-                    splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant,
+                    splitRatio: engine.splitRatio, variant: engine.layoutVariant,
                     animate: animated
                 )
             }
@@ -641,14 +726,12 @@ class WindowManager: WindowObserverDelegate {
             NativeTiling.applyLayout(
                 windows: windows, region: region, gap: config.innerGap,
                 singleWindowPadding: config.singleWindowPadding,
-                splitRatio: layoutEngine.splitRatio, variant: layoutEngine.layoutVariant,
+                splitRatio: engine.splitRatio, variant: engine.layoutVariant,
                 animate: animated
             )
         }
 
-        let layouts = layoutEngine.calculateFrames(in: region)
-        updateBorders(layouts: layouts)
-        updateDimming(layouts: layouts)
+        return engine.calculateFrames(in: region)
     }
 
     /// Retile with a scale-in effect for a newly created window.
@@ -816,7 +899,7 @@ class WindowManager: WindowObserverDelegate {
             if shouldFloat {
                 floatingWindows.insert(windowID)
             } else if axElements[windowID] != nil {
-                layoutEngine.insert(windowID: windowID, afterFocused: nil)
+                engine(forWindow: windowID).insert(windowID: windowID, afterFocused: nil)
             } else {
                 trackedWindows.removeValue(forKey: windowID)
             }
@@ -1006,7 +1089,11 @@ class WindowManager: WindowObserverDelegate {
             floatingWindows.insert(windowID)
             restoreWindowAlpha(windowID)
         } else if axElements[windowID] != nil {
-            layoutEngine.insert(windowID: windowID, afterFocused: focusedWindowID)
+            // The window joins the layout of the display it opened on. It used to join
+            // whichever display had the keyboard, so a window appearing on the second
+            // screen was tiled into the first one's row and dragged across to reach it.
+            let target = engine(forWindow: windowID)
+            target.insert(windowID: windowID, afterFocused: focusedWindowID)
 
             // Apply per-app layout rules (e.g. "Arc = left" puts Arc at index 0)
             let ruleKey = config.appLayoutRules[appName]
@@ -1014,11 +1101,11 @@ class WindowManager: WindowObserverDelegate {
             if let rule = ruleKey {
                 switch rule {
                 case "left":
-                    layoutEngine.tiledWindows.removeAll { $0 == windowID }
-                    layoutEngine.tiledWindows.insert(windowID, at: 0)
+                    target.tiledWindows.removeAll { $0 == windowID }
+                    target.tiledWindows.insert(windowID, at: 0)
                 case "right":
-                    layoutEngine.tiledWindows.removeAll { $0 == windowID }
-                    layoutEngine.tiledWindows.append(windowID)
+                    target.tiledWindows.removeAll { $0 == windowID }
+                    target.tiledWindows.append(windowID)
                 default: break
                 }
             }
@@ -1029,9 +1116,9 @@ class WindowManager: WindowObserverDelegate {
 
             // In Niri mode, insert as new column and scroll to it
             if config.niriMode {
-                layoutEngine.insertWindowAsNewColumn(windowID)
-                if let idx = layoutEngine.niriColumns.firstIndex(where: { $0.windows.contains(windowID) }) {
-                    layoutEngine.niriActiveColumn = idx
+                target.insertWindowAsNewColumn(windowID)
+                if let idx = target.niriColumns.firstIndex(where: { $0.windows.contains(windowID) }) {
+                    target.niriActiveColumn = idx
                 }
             }
 
@@ -1079,13 +1166,14 @@ class WindowManager: WindowObserverDelegate {
         if let terminalWID = swallowedWindows.removeValue(forKey: windowID),
            trackedWindows[terminalWID] != nil {
             // Find the destroyed window's position in the layout
-            let destroyedIndex = layoutEngine.tiledWindows.firstIndex(of: windowID)
+            let owner = engineHolding(windowID) ?? layoutEngine
+            let destroyedIndex = owner.tiledWindows.firstIndex(of: windowID)
 
             // Remove the GUI window from layout first
             if config.niriMode {
-                layoutEngine.removeWindowFromColumns(windowID)
+                owner.removeWindowFromColumns(windowID)
             }
-            layoutEngine.remove(windowID: windowID)
+            owner.remove(windowID: windowID)
 
             // Clean up the destroyed window
             trackedWindows.removeValue(forKey: windowID)
@@ -1154,13 +1242,18 @@ class WindowManager: WindowObserverDelegate {
         // answer, so in niri mode a closing window neither retiled nor moved focus: the
         // column vanished but the ones after it kept their old positions, leaving a hole
         // in the strip that stayed until something else forced a retile.
-        let wasTiled = layoutEngine.contains(windowID)
+        // A window can be destroyed while the keyboard is on another display, so take it
+        // out of the layout that is actually holding it, not the one in front of us. Left
+        // in the other screen's list it would keep a place in that layout for a window
+        // that no longer exists.
+        let owner = engineHolding(windowID) ?? layoutEngine
+        let wasTiled = owner.contains(windowID)
 
         if config.niriMode {
-            layoutEngine.removeWindowFromColumns(windowID)
+            owner.removeWindowFromColumns(windowID)
         }
         if wasTiled {
-            layoutEngine.remove(windowID: windowID)
+            owner.remove(windowID: windowID)
         }
 
         // Always try to focus a remaining tiled window after a tiled window is destroyed.
@@ -1509,25 +1602,26 @@ class WindowManager: WindowObserverDelegate {
         return CGRect(x: parkedX, y: frame.origin.y, width: frame.width, height: frame.height)
     }
 
-    private func retileNiri(animated: Bool = true) {
+    @discardableResult
+    private func retileNiri(engine: LayoutEngine, animated: Bool = true) -> [(CGWindowID, CGRect)] {
         // Keep the columns in step with the window list before placing anything.
         // A window can be in the list while no column knows about it: turning niri mode
         // on does that to every workspace at once, and moving a window in from another
         // workspace does it to one. Either way the window is never placed and stays
         // parked off-screen, which looks like it has vanished.
-        layoutEngine.reconcileColumns()
+        engine.reconcileColumns()
 
-        let region = getTilingRegion()
+        let region = region(for: engine)
         let results = NativeTiling.calculateNiriFrames(
-            columns: layoutEngine.niriColumns,
+            columns: engine.niriColumns,
             region: region,
             gap: config.innerGap,
-            activeColumn: layoutEngine.niriActiveColumn,
+            activeColumn: engine.niriActiveColumn,
             defaultColumnWidth: config.niriColumnWidth,
             stackMode: config.niriColumnStack,
-            scrollOffset: layoutEngine.niriScrollOffset,
+            scrollOffset: engine.niriScrollOffset,
             fillScreen: config.niriFillScreen,
-            resultingScrollOffset: &layoutEngine.niriScrollOffset
+            resultingScrollOffset: &engine.niriScrollOffset
         )
 
         // Park what is not on screen just past the edge it belongs to. These used to sit
@@ -1581,9 +1675,7 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
-        let visibleLayouts: [(CGWindowID, CGRect)] = results.filter { $0.isVisible }.flatMap { $0.windowFrames.map { ($0.windowID, $0.frame) } }
-        updateBorders(layouts: visibleLayouts)
-        updateDimming(layouts: visibleLayouts)
+        return results.filter { $0.isVisible }.flatMap { $0.windowFrames.map { ($0.windowID, $0.frame) } }
     }
 
     /// Niri retile with scale-in animation for a new window.
@@ -1823,7 +1915,7 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.niriColumns[ci].focusedIndex = target
         layoutEngine.syncTiledWindowsFromColumns()
         focusedWindowID = wid
-        retileNiri()
+        retile()
         onFocusChange?()
     }
 
@@ -1844,7 +1936,7 @@ class WindowManager: WindowObserverDelegate {
             focusedWindowID = targetWID
         }
 
-        retileNiri()
+        retile()
 
         onFocusChange?()
     }
@@ -1873,7 +1965,7 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.niriColumns.swapAt(ci, target)
         layoutEngine.niriActiveColumn = target
         layoutEngine.syncTiledWindowsFromColumns()
-        retileNiri()
+        retile()
         onFocusChange?()
         panelessLog("Niri move column \(right ? "right" : "left")")
     }
@@ -1923,7 +2015,7 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.niriColumns.removeAll { $0.windows.isEmpty }
         layoutEngine.syncTiledWindowsFromColumns()
         focusedWindowID = wid
-        retileNiri()
+        retile()
         onFocusChange?()
         panelessLog("Niri move \(right ? "right" : "left"): window \(wid)")
     }
@@ -1957,7 +2049,7 @@ class WindowManager: WindowObserverDelegate {
 
         layoutEngine.syncTiledWindowsFromColumns()
         focusedWindowID = wid
-        retileNiri()
+        retile()
 
         onFocusChange?()
         panelessLog("Niri consume: absorbed window \(wid) into column \(ci)")
@@ -1987,7 +2079,7 @@ class WindowManager: WindowObserverDelegate {
 
         layoutEngine.syncTiledWindowsFromColumns()
         focusedWindowID = wid
-        retileNiri()
+        retile()
 
         onFocusChange?()
         panelessLog("Niri expel: ejected window \(wid) into new column \(ci + 1)")
