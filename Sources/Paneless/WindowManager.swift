@@ -1649,38 +1649,45 @@ class WindowManager: WindowObserverDelegate {
     /// windows in the order they are laid out instead: through the current column first,
     /// then on to the next one.
     private func niriFocusDirection(_ delta: Int) {
-        guard !layoutEngine.niriColumns.isEmpty else { return }
+        // Walk the strip in reading order, then the floating windows.
+        //
+        // Floating windows were left out of this walk entirely, so in niri mode nothing
+        // on the keyboard could reach one: a dialog that ended up behind the columns
+        // stayed there for good. niri gives floating windows a layer of their own and a
+        // separate key to cross between layers. The same keys already step past them in
+        // the other mode, so here they go on the end of the same walk.
+        var order: [CGWindowID] = []
+        for column in layoutEngine.niriColumns { order.append(contentsOf: column.windows) }
+        order.append(contentsOf: floatingWindows.sorted())
+        guard order.count >= 2 else { return }
 
-        var col = min(max(layoutEngine.niriActiveColumn, 0), layoutEngine.niriColumns.count - 1)
-        var row = layoutEngine.niriColumns[col].clampedFocusedIndex
-        if let wid = focusedWindowID, let found = layoutEngine.findWindowInColumns(wid) {
-            col = found.col; row = found.row
+        let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        guard let index = currentID.flatMap({ order.firstIndex(of: $0) }) else {
+            // Nothing we know about holds focus, so start from the end we are heading for.
+            niriFocus(order[delta > 0 ? 0 : order.count - 1])
+            return
         }
 
-        row += delta
-        if row < 0 {
-            guard col > 0 else { return }
-            col -= 1
-            row = max(0, layoutEngine.niriColumns[col].windows.count - 1)
-        } else if row >= layoutEngine.niriColumns[col].windows.count {
-            guard col + 1 < layoutEngine.niriColumns.count else { return }
-            col += 1
-            row = 0
-        }
+        let next = index + delta
+        guard next >= 0 && next < order.count else { return }
+        niriFocus(order[next])
+    }
 
-        layoutEngine.niriColumns[col].focusedIndex = row
-        let target = layoutEngine.niriColumns[col].windows[row]
-        niriScrollToColumn(col)
-
-        if let element = axElements[target], let tracked = trackedWindows[target] {
-            AccessibilityBridge.focus(window: element, pid: tracked.pid)
-            focusedWindowID = target
-            onFocusChange?()
+    /// Focus one window from the niri walk, scrolling the strip only when it belongs to it.
+    private func niriFocus(_ wid: CGWindowID) {
+        if let found = layoutEngine.findWindowInColumns(wid) {
+            layoutEngine.niriColumns[found.col].focusedIndex = found.row
+            niriScrollToColumn(found.col)
         }
+        guard let element = axElements[wid], let tracked = trackedWindows[wid] else { return }
+        AccessibilityBridge.focus(window: element, pid: tracked.pid)
+        focusedWindowID = wid
+        onFocusChange?()
     }
 
     /// Animate scroll from current column to target column.
-    /// Windows stay at strip positions (alpha-hidden), so animation is a smooth slide.
+    /// Columns leaving the viewport slide out to the parked spot rather than stopping at
+    /// their place in the strip, which is where they used to sit waiting to be faded.
     private func niriScrollToColumn(_ col: Int) {
         guard col >= 0 && col < layoutEngine.niriColumns.count else { return }
 
