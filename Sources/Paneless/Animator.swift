@@ -67,7 +67,10 @@ class Animator: NSObject {
     private let newWindowDelay: TimeInterval = 0.10
 
     /// Matches what macOS's own tiling takes (measured 330ms for TextEdit, 355ms for Safari).
-    private let windowMoveDuration: CFTimeInterval = 0.33
+    /// A scroll step: short enough that a second key press lands after it, not inside it.
+    static let moveDuration: CFTimeInterval = 0.16
+    /// A reflow, where sizes change and windows trade places. Hyprland's default.
+    static let reflowDuration: CFTimeInterval = 0.33
 
     struct Transition {
         let windowID: CGWindowID
@@ -176,6 +179,12 @@ class Animator: NSObject {
         let to: CGRect
         /// The window travels without changing size, so kAXSize is never written.
         let moveOnly: Bool
+        /// How long this window takes. A scroll along the strip wants to be over before
+        /// the next key arrives; a reflow, where windows change size and swap places, is
+        /// worth watching. One duration for both meant every scroll was still running when
+        /// the next one cancelled it, so the curve restarted from its fast opening again
+        /// and again, which reads as a pulse rather than as motion.
+        let duration: CFTimeInterval
         /// Set once the app has demonstrated it will not take the size we ask for.
         /// Fixed-size windows and windows that snap to a character grid, like terminals,
         /// otherwise cost a full resize per frame and ignore every one of them.
@@ -199,7 +208,9 @@ class Animator: NSObject {
             self.element = element
             self.from = from
             self.to = to
-            self.moveOnly = abs(from.width - to.width) < 2 && abs(from.height - to.height) < 2
+            let onlyMoves = abs(from.width - to.width) < 2 && abs(from.height - to.height) < 2
+            self.moveOnly = onlyMoves
+            self.duration = onlyMoves ? Animator.moveDuration : Animator.reflowDuration
         }
     }
 
@@ -342,14 +353,14 @@ class Animator: NSObject {
 
         let elapsed = CACurrentMediaTime() - started
         let lastDelay = steps.map(\.delay).max() ?? 0
-        if elapsed >= windowMoveDuration + lastDelay {
+        if elapsed >= (glides.map { $0.duration }.max() ?? Animator.reflowDuration) + lastDelay {
             DispatchQueue.main.async { [weak self] in self?.finishGlide(commit: true) }
             return
         }
 
         for g in steps {
             // Each window runs its own clock, offset by its place in the reflow.
-            let own = min(max((elapsed - g.delay) / windowMoveDuration, 0), 1)
+            let own = min(max((elapsed - g.delay) / g.duration, 0), 1)
             guard own > 0 else { continue }
             let e = g.overshoot ? easeOutBack(CGFloat(own)) : easeOut.evaluate(CGFloat(own))
             // Skip any window still busy with its previous write. A slow app then simply
