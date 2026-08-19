@@ -1,18 +1,24 @@
 #!/bin/bash
 # Build and install a development build into /Applications/Paneless.app.
 #
-# Signs with the stable Apple Development identity rather than ad-hoc. Ad-hoc
-# signing gives the binary a new code directory hash on every build, so macOS
-# treats each deploy as a different app and revokes the Accessibility grant,
-# forcing you to approve Paneless again after every single build. A stable
-# signing identity keeps the grant.
+# Signs with the same Developer ID certificate a release uses. macOS keys the
+# Accessibility grant on the app's designated requirement, and that requirement names
+# the signing certificate, so a dev build signed with a different one counts as a
+# different app and has to be approved all over again. Signing both the same way means
+# the grant is given once and then left alone, whichever build happens to be installed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 APP="/Applications/Paneless.app"
-IDENTITY="${PANELESS_SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
-    | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+source Scripts/signing-identity.sh
+IDENTITY="${PANELESS_SIGN_IDENTITY:-$(paneless_developer_id_hash)}"
+
+if [ -z "$IDENTITY" ]; then
+    IDENTITY="$(paneless_apple_development_hash)"
+    echo "No Developer ID certificate found, falling back to Apple Development."
+    echo "Moving between this build and a release will ask for Accessibility once."
+fi
 
 if [ -z "$IDENTITY" ]; then
     echo "No signing identity found, falling back to ad-hoc."
