@@ -1487,6 +1487,26 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Niri Scrolling Column Mode
 
     /// Core Niri retile: calculate column frames, animate visible windows, hide off-screen ones.
+    /// Where a column goes when it is not on screen.
+    ///
+    /// Parking against the tiling region left the window inside the outer gap, so a
+    /// strip of it stayed in view and read as a narrower gap beside the last visible
+    /// window. macOS will not let a window leave the display altogether, so the most
+    /// that can be hidden is everything but the single pixel it keeps reachable.
+    private func niriParkedFrame(_ frame: CGRect, region: TilingRegion) -> CGRect {
+        let screen = NSScreen.main.map { screenFrameInAX(for: $0) }
+            ?? CGRect(x: region.x, y: region.y, width: region.width, height: region.height)
+        // Leaving on the left needs two pixels of margin rather than one. The width an
+        // app accepts is rounded down, so one pixel can leave the window a fraction short
+        // of the edge, and macOS reads that as entirely off screen and snaps it back to
+        // where forty pixels still show. Going off the right edge has no such problem:
+        // the window extends away from the screen, so its origin alone decides.
+        let parkedX = frame.midX < region.x + region.width / 2
+            ? screen.minX - frame.width + 2
+            : screen.maxX - 1
+        return CGRect(x: parkedX, y: frame.origin.y, width: frame.width, height: frame.height)
+    }
+
     private func retileNiri(animated: Bool = true) {
         // Keep the columns in step with the window list before placing anything.
         // A window can be in the list while no column knows about it: turning niri mode
@@ -1508,27 +1528,32 @@ class WindowManager: WindowObserverDelegate {
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 
-        // Park what is not on screen just past the edge it belongs to, leaving the one
-        // pixel macOS refuses to give up. These used to sit at their true position in the
-        // strip, which is why a column that only just missed the edge stayed in plain
-        // sight under the neighbouring window: nothing was covering it, because window
-        // alpha does not cross process boundaries.
+        // Park what is not on screen just past the edge it belongs to. These used to sit
+        // at their true position in the strip, which is why a column that only just
+        // missed the edge stayed in plain sight under the neighbouring window: nothing
+        // was covering it, because window alpha does not cross process boundaries.
+        //
+        // A window that was on screen a moment ago slides out to the parked spot instead
+        // of vanishing where it stood.
+        var transitions: [Animator.Transition] = []
         for colResult in results where !colResult.isVisible {
             for (wid, frame) in colResult.windowFrames {
                 guard let element = axElements[wid] else { continue }
-                let parkedX = frame.midX < region.x + region.width / 2
-                    ? region.x - frame.width + 1
-                    : region.x + region.width - 1
-                AccessibilityBridge.setFrame(of: element, to: CGRect(
-                    x: parkedX, y: frame.origin.y,
-                    width: frame.width, height: frame.height))
+                let parked = niriParkedFrame(frame, region: region)
+                if !niriHiddenWindows.contains(wid), trackedWindows[wid] != nil,
+                   let current = AccessibilityBridge.getFrame(of: element) {
+                    transitions.append(Animator.Transition(
+                        windowID: wid, element: element,
+                        startFrame: current, targetFrame: parked))
+                } else {
+                    AccessibilityBridge.setFrame(of: element, to: parked)
+                }
             }
         }
 
         niriUpdateVisibility(results)
 
         // Animate visible windows
-        var transitions: [Animator.Transition] = []
         for colResult in results where colResult.isVisible {
             for (wid, frame) in colResult.windowFrames {
                 guard let element = axElements[wid],
@@ -1696,10 +1721,17 @@ class WindowManager: WindowObserverDelegate {
                 // Animate windows that are currently visible or will become visible
                 let isCurrentlyVisible = !niriHiddenWindows.contains(wid)
                 guard colResult.isVisible || isCurrentlyVisible else { continue }
-                let currentFrame = AccessibilityBridge.getFrame(of: element) ?? targetFrame
+                // A window on its way out slides to where it will be parked, not to its
+                // place in the strip. Animating it to the strip position left it sitting
+                // half on screen until the delayed hide caught up, which is what made it
+                // look like it was being dragged off the edge.
+                let endFrame = colResult.isVisible
+                    ? targetFrame
+                    : niriParkedFrame(targetFrame, region: region)
+                let currentFrame = AccessibilityBridge.getFrame(of: element) ?? endFrame
                 transitions.append(Animator.Transition(
                     windowID: wid, element: element,
-                    startFrame: currentFrame, targetFrame: targetFrame
+                    startFrame: currentFrame, targetFrame: endFrame
                 ))
             }
         }
@@ -1715,12 +1747,8 @@ class WindowManager: WindowObserverDelegate {
                 for (wid, frame) in colResult.windowFrames {
                     self.niriHiddenWindows.insert(wid)
                     guard let element = self.axElements[wid] else { continue }
-                    let parkedX = frame.midX < region.x + region.width / 2
-                        ? region.x - frame.width + 1
-                        : region.x + region.width - 1
-                    AccessibilityBridge.setFrame(of: element, to: CGRect(
-                        x: parkedX, y: frame.origin.y,
-                        width: frame.width, height: frame.height))
+                    AccessibilityBridge.setFrame(
+                        of: element, to: self.niriParkedFrame(frame, region: region))
                 }
             }
             var known = self.observer.currentKnownWindows
