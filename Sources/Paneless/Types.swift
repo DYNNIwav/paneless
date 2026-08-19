@@ -86,6 +86,8 @@ enum WMAction {
     case niriConsume
     case niriExpel
     case niriMoveLeft
+    case niriMoveUp
+    case niriMoveDown
     case niriMoveRight
     case niriMoveColumnLeft
     case niriMoveColumnRight

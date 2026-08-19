@@ -509,10 +509,16 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             [bindings]
             # Custom bindings are merged with defaults (custom takes priority).
             # Format: modifier, key = action
-            alt+shift, h = focus_prev
-            alt+shift, l = focus_next
-            alt+shift, j = rotate_next
-            alt+shift, k = rotate_prev
+            # alt moves YOU, alt+shift moves the THING, the rule the workspace keys
+            # already follow: alt 1-9 goes to a workspace, alt+shift 1-9 takes the
+            # window along. h and l are horizontal, j and k vertical.
+            alt, h = focus_prev
+            alt, l = focus_next
+            alt+shift, h = rotate_prev
+            alt+shift, l = rotate_next
+            # Vertical order within a niri column.
+            alt+shift, j = niri_move_down
+            alt+shift, k = niri_move_up
             alt+shift, return = swap_master
             alt+shift, space = cycle_layout
             alt+shift, t = toggle_float

@@ -214,6 +214,8 @@ class WindowManager: WindowObserverDelegate {
         case .niriMoveColumnLeft:           niriMoveColumn(right: false)
         case .niriMoveColumnRight:          niriMoveColumn(right: true)
         case .niriMoveLeft:                 niriMoveFocused(right: false)
+        case .niriMoveUp:                   niriMoveVertical(-1)
+        case .niriMoveDown:                 niriMoveVertical(1)
         case .niriMoveRight:                niriMoveFocused(right: true)
         case .niriExpel:                    niriExpel()
         }
@@ -1805,6 +1807,26 @@ class WindowManager: WindowObserverDelegate {
     }
 
     /// Navigate up/down within the active column's window stack.
+    /// Move the focused window up or down inside its own column.
+    ///
+    /// Columns stack vertically, but nothing could reorder that stack. The vertical keys
+    /// stepped focus and the horizontal ones moved the whole column, so a window could
+    /// join a column and never change places with the one it had joined.
+    private func niriMoveVertical(_ delta: Int) {
+        guard config.niriMode, let wid = focusedWindowID else { return }
+        guard let (ci, ri) = layoutEngine.findWindowInColumns(wid) else { return }
+
+        let target = ri + delta
+        guard target >= 0 && target < layoutEngine.niriColumns[ci].windows.count else { return }
+
+        layoutEngine.niriColumns[ci].windows.swapAt(ri, target)
+        layoutEngine.niriColumns[ci].focusedIndex = target
+        layoutEngine.syncTiledWindowsFromColumns()
+        focusedWindowID = wid
+        retileNiri()
+        onFocusChange?()
+    }
+
     private func niriFocusVertical(_ delta: Int) {
         guard !layoutEngine.niriColumns.isEmpty else { return }
         let ci = max(0, min(layoutEngine.niriActiveColumn, layoutEngine.niriColumns.count - 1))

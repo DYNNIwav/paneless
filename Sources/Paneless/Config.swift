@@ -453,6 +453,8 @@ struct PanelessConfig {
         case "niri_consume": return .niriConsume
         case "niri_expel": return .niriExpel
         case "niri_move_left": return .niriMoveLeft
+        case "niri_move_up": return .niriMoveUp
+        case "niri_move_down": return .niriMoveDown
         case "niri_move_right": return .niriMoveRight
         case "niri_move_column_left": return .niriMoveColumnLeft
         case "niri_move_column_right": return .niriMoveColumnRight
@@ -499,6 +501,8 @@ struct PanelessConfig {
         case .niriMoveColumnLeft: return "niri_move_column_left"
         case .niriMoveColumnRight: return "niri_move_column_right"
         case .niriMoveLeft: return "niri_move_left"
+        case .niriMoveUp: return "niri_move_up"
+        case .niriMoveDown: return "niri_move_down"
         case .niriMoveRight: return "niri_move_right"
         case .niriConsume: return "niri_consume"
         case .niriExpel: return "niri_expel"
