@@ -67,21 +67,48 @@ To start at login: **System Settings > General > Login Items > add Paneless**.
 
 ## Keybindings
 
-### Window Focus & Layout
+The modifier says what moves. **Alt moves you, Alt+Shift moves the thing.** `H` and `L`
+are always horizontal, `J` and `K` always vertical. The workspace keys have always worked
+that way, and everything else follows them now.
+
+### Focus
 
 | Binding | Action |
 |---------|--------|
-| `Alt+Shift+H` | Focus previous window |
-| `Alt+Shift+L` | Focus next window |
-| `Alt+Shift+J` | Rotate windows forward (Hyprland) / Focus down in column (Niri) |
-| `Alt+Shift+K` | Rotate windows backward (Hyprland) / Focus up in column (Niri) |
-| `Alt+Shift+Enter` | Swap with master (first window) |
-| `Alt+Shift+Space` | Cycle layout (side-by-side / stacked / monocle) |
+| `Alt+H` / `Alt+L` | Focus left / right. In Niri this steps column to column |
+| `Alt+J` / `Alt+K` | Focus down / up. In Niri this moves within the current column |
+| `Alt+1` ... `Alt+9` | Go to a workspace |
+| `Alt+Shift+,` / `Alt+Shift+.` | Focus the monitor to the left / right |
+
+Floating windows come after the last column, so `Alt+L` reaches them too. Nothing else
+does, which is why they are on the same walk.
+
+### Moving windows
+
+| Binding | Action |
+|---------|--------|
+| `Alt+Shift+H` / `Alt+Shift+L` | Move the column left / right. In Hyprland mode this rotates the stack |
+| `Alt+Shift+J` / `Alt+Shift+K` | Move the window down / up inside its column (Niri) |
+| `Alt+Ctrl+H` / `Alt+Ctrl+L` | Move the window out of its column, or into the one beside it (Niri) |
+| `Alt+Shift+1` ... `Alt+Shift+9` | Take the window to a workspace |
+| `Alt+Shift+Enter` | Swap with master |
+
+`Alt+Ctrl+H` and `Alt+Ctrl+L` are Niri's consume-or-expel. A window on its own moves into
+the column beside it; a window sharing a column leaves it and stands alone. The same key
+does both, which is quick once learned and confusing before then.
+
+### Window state
+
+| Binding | Action |
+|---------|--------|
 | `Alt+Shift+T` | Toggle float |
 | `Alt+Shift+F` | Toggle fullscreen |
+| `Alt+Shift+M` | Minimize |
 | `Alt+Shift+Q` | Close focused window |
+| `Alt+Shift+Space` | Cycle layout variant |
+| `Alt+Shift+R` | Reload config |
 
-### Window Positioning
+### Positioning
 
 | Binding | Action |
 |---------|--------|
@@ -89,44 +116,18 @@ To start at login: **System Settings > General > Login Items > add Paneless**.
 | `Cmd+Shift+L` | Move to last position |
 | `Cmd+Shift+K` | Swap one position earlier |
 | `Cmd+Shift+J` | Swap one position later |
-| `Cmd+Shift+F` | Fill entire tiling region |
+| `Cmd+Shift+F` | Fill the tiling region |
 
 ### Sizing
 
 | Binding | Action |
 |---------|--------|
-| `Alt+Shift+]` | Grow focused (increase split ratio) |
-| `Alt+Shift+[` | Shrink focused (decrease split ratio) |
-| `Alt+Shift+=` | Increase gaps |
-| `Alt+Shift+-` | Decrease gaps |
-| `Ctrl+Drag` | Mouse drag resize on split divider |
-
-### Monitors
-
-| Binding | Action |
-|---------|--------|
-| `Alt+Shift+,` | Focus monitor left |
-| `Alt+Shift+.` | Focus monitor right |
-
-### Niri Mode
-
-| Binding | Action |
-|---------|--------|
-| `Alt+Shift+H/L` | Scroll to previous/next column |
-| `Alt+Shift+J/K` | Focus up/down within a column |
-| `Alt+Shift+Space` | Cycle column width (full / half / third) |
-| `Alt+Shift+C` | Consume: absorb window from right column into current |
-| `Alt+Shift+X` | Expel: eject focused window into its own column |
-| `Alt+Shift+]/[` | Grow/shrink column width |
-
-### Virtual Workspaces
-
-| Binding | Action |
-|---------|--------|
-| `Alt+1` ... `Alt+9` | Switch to workspace |
-| `Alt+Shift+1` ... `Alt+Shift+9` | Move focused window to workspace |
+| `Alt+Shift+]` / `Alt+Shift+[` | Grow / shrink the focused window or column |
+| `Alt+Shift+=` / `Alt+Shift+-` | Increase / decrease gaps |
+| `Ctrl+Drag` | Resize on the split divider |
 
 Workspace keybindings are always active, even with a custom `[bindings]` section.
+
 
 ## Layout Variants
 
@@ -160,7 +161,11 @@ Cycle with `Alt+Shift+Space`:
 
 ### Niri Mode
 
-Set `tiling_mode = niri` in config. Windows are arranged as columns in an infinite horizontal strip. The active column is centered on screen; off-screen columns are hidden.
+Set `tiling_mode = niri` in config. Windows are arranged as columns in an infinite
+horizontal strip. The view scrolls only as far as it must to keep the focused column in
+sight, and lands on a column boundary, so you never see part of one. Columns that do not
+fit are parked off screen: macOS will not let one process fade or reorder another
+application's window, so position is the only thing that can hide them.
 
 ```
 3 columns (active = B):          Column with 2 stacked windows:
@@ -172,7 +177,9 @@ Set `tiling_mode = niri` in config. Windows are arranged as columns in an infini
   ←hidden→ +--------+ ←hidden→   +--------+
 ```
 
-Use `Alt+Shift+C` to consume an adjacent window into the current column (vertical stack), and `Alt+Shift+X` to expel it back into its own column.
+Use `Alt+Ctrl+L` and `Alt+Ctrl+H` to move the focused window between columns: on its own
+it joins the column beside it, sharing one it leaves and stands alone. `Alt+Shift+J` and
+`Alt+Shift+K` reorder a column's stack, and `Alt+J` and `Alt+K` move focus within it.
 
 ## Configuration
 
@@ -197,7 +204,10 @@ dim_unfocused = 0.03
 
 # Tiling mode: "hyprland" (default) or "niri" (scrolling columns)
 # tiling_mode = niri
-# niri_column_width = 1.0
+# niri_column_width = 0.333
+# niri_min_column_width = 640
+# niri_column_stack = auto
+# niri_fill_screen = true
 
 # Auto-switch workspace when an app on another workspace gets activated
 # focus_follows_app = true
@@ -245,10 +255,17 @@ float = Finder, System Settings, Calculator, Archive Utility, System Preferences
 [bindings]
 # Custom bindings are merged with defaults (custom takes priority).
 # Format: modifiers, key = action
-alt+shift, h = focus_prev
-alt+shift, l = focus_next
-alt+shift, j = rotate_next
-alt+shift, k = rotate_prev
+# alt moves you, alt+shift moves the thing. h and l are horizontal, j and k vertical.
+alt, h = focus_prev
+alt, l = focus_next
+alt, j = focus_down
+alt, k = focus_up
+alt+shift, h = rotate_prev
+alt+shift, l = rotate_next
+alt+shift, j = niri_move_down
+alt+shift, k = niri_move_up
+alt+ctrl, h = niri_move_left
+alt+ctrl, l = niri_move_right
 alt+shift, return = swap_master
 alt+shift, space = cycle_layout
 alt+shift, t = toggle_float
@@ -272,7 +289,8 @@ cmd+shift, f = position_fill
 # alt+shift, a = set_mark a
 # alt, a = jump_mark a
 
-# Niri mode (when tiling_mode = niri):
+# Niri mode (when tiling_mode = niri). The pair above covers most of it; these two are
+# the explicit halves of it, for when you want one direction only:
 # alt+shift, c = niri_consume
 # alt+shift, x = niri_expel
 
@@ -301,7 +319,12 @@ cmd+shift, f = position_fill
 | layout | `native_animation` | false | Use native macOS compositor tiling (Sequoia+, no gaps) |
 | layout | `auto_float_dialogs` | true | Auto-float dialogs and small windows |
 | layout | `tiling_mode` | hyprland | Tiling mode: `hyprland` or `niri` |
-| layout | `niri_column_width` | 1.0 | Default Niri column width as fraction (1.0 = full, 0.5 = half) |
+| layout | `niri_column_width` | 0.5 | Default Niri column width as a fraction (1.0 = full, 0.5 = half) |
+| layout | `niri_min_column_width` | 640 | Narrowest a column may get, in points. A column below this steps up to the next whole fraction, so a screen too narrow for thirds uses halves. 0 turns it off |
+| layout | `niri_column_stack` | auto | How windows sharing a column are arranged: `vertical`, `horizontal`, or `auto`, which stacks them until a pane would fall below 400 points |
+| layout | `niri_fill_screen` | true | Widen columns while they still fit, so one window fills the screen and two take half each before the strip starts scrolling |
+| layout | `size_once` | false | Set a window's size in a single write instead of on every animation frame. Cheaper, but the size snaps while the position glides |
+| layout | `app_driven_animation` | false | Leave `AXEnhancedUserInterface` on so applications animate their own movement. Smooth in the apps that support it, ignored by the ones that do not |
 | layout | `focus_follows_app` | true | Auto-switch workspace when an app on another workspace is activated |
 | layout | `hyperkey` | *(disabled)* | Key that acts as Ctrl+Opt+Cmd+Shift when held, globally (`f18`, `caps_lock`, `grave`, etc.) |
 | layout | `force_promotion` | false | Force ProMotion to stay at 120Hz |
@@ -350,8 +373,11 @@ For use in the `[bindings]` section:
 | `reload_config` | Reload config file |
 | `set_mark X` | Mark focused window as "X" (vim-style) |
 | `jump_mark X` | Jump to window marked "X" (switches workspace if needed) |
-| `niri_consume` | Niri: absorb window from right column into current column |
-| `niri_expel` | Niri: eject focused window from column into its own column |
+| `niri_move_left` / `niri_move_right` | Niri: move the focused window between columns. Alone it joins the column beside it, sharing one it leaves and stands alone |
+| `niri_move_up` / `niri_move_down` | Niri: reorder the focused window within its column |
+| `niri_move_column_left` / `niri_move_column_right` | Niri: move the whole column, windows and all |
+| `niri_consume` | Niri: absorb a window from the column to the right into this one. The explicit half of `niri_move_left` |
+| `niri_expel` | Niri: eject the focused window out into a column of its own. The explicit half of `niri_move_right` |
 
 ## CLI
 
@@ -387,4 +413,7 @@ Inspired by [Hyprland](https://hyprland.org/), [AeroSpace](https://github.com/ni
 
 ## License
 
-MIT
+[GNU General Public License v3.0](LICENSE).
+
+You may read, use and change this freely. If you distribute a version of it, the source
+has to go with it.

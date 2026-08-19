@@ -3,7 +3,6 @@ import Cocoa
 struct PanelessConfig {
     var innerGap: CGFloat = 8
     var outerGap: CGFloat = 8
-    var spaceSwitchModifier: String = "alt"
 
     // Auto-float dialogs and small windows
     var autoFloatDialogs: Bool = true
@@ -225,7 +224,6 @@ struct PanelessConfig {
                 switch key {
                 case "inner_gap": config.innerGap = CGFloat(Double(value) ?? 8)
                 case "outer_gap": config.outerGap = CGFloat(Double(value) ?? 8)
-                case "space_switch_modifier": config.spaceSwitchModifier = value.lowercased()
                 case "auto_float_dialogs": config.autoFloatDialogs = value != "false" && value != "0"
                 case "single_window_padding": config.singleWindowPadding = CGFloat(Double(value) ?? 0)
                 case "focus_follows_mouse": config.focusFollowsMouse = value == "true" || value == "1"

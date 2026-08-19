@@ -34,13 +34,21 @@ struct GeneralTab: View {
                     }
                     SettingDescription(text: "Width of each column as a percentage of the screen. 100% = one column fills the screen.")
 
+                    HStack {
+                        Stepper("Narrowest column", value: $viewModel.niriMinColumnWidth, in: 0...2000, step: 40)
+                        Text(viewModel.niriMinColumnWidth == 0 ? "off" : "\(Int(viewModel.niriMinColumnWidth)) pt")
+                            .monospacedDigit()
+                            .frame(width: 60, alignment: .trailing)
+                    }
+                    SettingDescription(text: "The width above is a percentage, so it means a roomy column on a large display and a cramped one on a laptop. A column narrower than this steps up to the next whole fraction instead: a screen too narrow for thirds uses halves. Set to 0 to let the percentage stand whatever the screen.")
+
                     Picker("Windows sharing a column", selection: $viewModel.niriColumnStack) {
                         Text("Automatic").tag("auto")
                         Text("Stacked").tag("vertical")
                         Text("Side by side").tag("horizontal")
                     }
                     SettingDescription(text: viewModel.niriColumnStack == "auto"
-                        ? "Splits whichever side is longer, so panes stay as square as possible whatever the column width."
+                        ? "Stacks them until a pane would get too short to work in, and only then splits the column across."
                         : (viewModel.niriColumnStack == "vertical"
                             ? "Always one above the other. Best in wide columns; in narrow ones it makes letterbox strips."
                             : "Always beside each other. Best in wide columns; in narrow ones it makes thin slivers."))

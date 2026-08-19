@@ -19,6 +19,7 @@ class SettingsViewModel: ObservableObject {
     @Published var dimUnfocused: CGFloat = 0
     @Published var hyperkeyOption: String = "disabled"
     @Published var niriColumnWidth: CGFloat = 0.5
+    @Published var niriMinColumnWidth: CGFloat = 640
     @Published var niriColumnStack: String = "auto"
     @Published var niriFillScreen: Bool = true
     @Published var sizeOnce: Bool = false
@@ -97,6 +98,7 @@ class SettingsViewModel: ObservableObject {
         forceProMotion = config.forceProMotion
         dimUnfocused = config.dimUnfocused
         niriColumnWidth = config.niriColumnWidth
+        niriMinColumnWidth = config.niriMinColumnWidth
         niriColumnStack = config.niriColumnStack
         niriFillScreen = config.niriFillScreen
         sizeOnce = config.sizeOnce
@@ -171,6 +173,7 @@ class SettingsViewModel: ObservableObject {
         config.forceProMotion = forceProMotion
         config.dimUnfocused = dimUnfocused
         config.niriColumnWidth = niriColumnWidth
+        config.niriMinColumnWidth = niriMinColumnWidth
         config.niriColumnStack = niriColumnStack
         config.niriFillScreen = niriFillScreen
         config.sizeOnce = sizeOnce
@@ -246,6 +249,7 @@ class SettingsViewModel: ObservableObject {
             || oldConfig.singleWindowPadding != config.singleWindowPadding
             || oldConfig.tilingMode != config.tilingMode
             || oldConfig.niriColumnWidth != config.niriColumnWidth
+            || oldConfig.niriMinColumnWidth != config.niriMinColumnWidth
             || oldConfig.niriColumnStack != config.niriColumnStack
             || oldConfig.niriFillScreen != config.niriFillScreen
 
