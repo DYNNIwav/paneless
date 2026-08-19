@@ -3082,6 +3082,12 @@ class WindowManager: WindowObserverDelegate {
             let screenFrame = screenFrameInAX(for: screen)
             for wid in allWindows {
                 guard let info = SpaceManager.getWindowInfo(wid) else { continue }
+                // A window we are going to lay out anyway does not need rescuing, and a
+                // parked column looks exactly like a stranded one: parking leaves a single
+                // pixel at the screen edge, which is the very signature this looks for.
+                // Rescuing those dragged them into the middle of the display and left them
+                // there, because nothing laid the strip out again afterwards.
+                if engineHolding(wid) != nil { continue }
                 if WorkspaceManager.shared.isHiddenPosition(screenFrame: screenFrame, windowFrame: info.frame) {
                     if let (element, _) = AccessibilityBridge.getWindows(for: info.pid).first(where: { $0.1 == wid }) {
                         let centerX = screenFrame.origin.x + screenFrame.width / 4
