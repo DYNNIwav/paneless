@@ -273,6 +273,7 @@ enum NativeTiling {
         gap: CGFloat,
         activeColumn: Int,
         defaultColumnWidth: CGFloat,
+        minColumnWidth: CGFloat = 0,
         stackMode: String = "auto",
         scrollOffset: CGFloat = 0,
         fillScreen: Bool = false,
@@ -289,8 +290,22 @@ enum NativeTiling {
         // Past the point where they fill the screen the configured width applies and the
         // strip starts to scroll.
         let fitWidth = 1.0 / CGFloat(max(columns.count, 1))
-        let effectiveDefaultWidth = fillScreen ? max(defaultColumnWidth, min(fitWidth, 1.0))
+        var effectiveDefaultWidth = fillScreen ? max(defaultColumnWidth, min(fitWidth, 1.0))
                                                : defaultColumnWidth
+
+        // Never leave a column too narrow to work in.
+        //
+        // The configured width is a fraction, so one number means 1274 points on a wide
+        // display and 498 on a laptop, and only one of those is a window anyone wants.
+        // Step up through whole fractions until the column clears the floor, so a screen
+        // that cannot fit thirds falls back to halves rather than to some number like
+        // 0.42. Nothing changes on a display wide enough for the configured width.
+        if minColumnWidth > 0 {
+            for candidate in [1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0] as [CGFloat]
+            where region.width * effectiveDefaultWidth < minColumnWidth {
+                if candidate > effectiveDefaultWidth { effectiveDefaultWidth = candidate }
+            }
+        }
 
         // Compute each column's width in pixels
         let colWidths: [CGFloat] = columns.map { col in
@@ -327,6 +342,28 @@ enum NativeTiling {
         }
         // Never scroll past the start of the strip.
         offset = min(offset, region.x)
+
+        // Land on a column boundary.
+        //
+        // Partial columns are hidden, so a strip left mid-scroll shows a band of bare
+        // desktop where the hidden column would have stood, and the row stops being even.
+        // Pick the boundary nearest to where the strip already is that still shows the
+        // active column whole, so the view moves as little as it has to.
+        let activeRight = activeX + activeW
+        var bestOffset = offset
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for start in colXPositions {
+            let candidate = min(region.x - start, region.x)
+            guard activeX + candidate >= region.x - 1,
+                  activeRight + candidate <= region.x + region.width + 1
+            else { continue }
+            let distance = abs(candidate - offset)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestOffset = candidate
+            }
+        }
+        offset = bestOffset
         resultingScrollOffset = offset
 
         // Build results

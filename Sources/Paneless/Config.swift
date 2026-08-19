@@ -43,6 +43,10 @@ struct PanelessConfig {
     /// Fraction of the screen a column takes. niri's own default is 0.5; a full-width
     /// default means only one window is ever visible, which defeats the point of a strip.
     var niriColumnWidth: CGFloat = 0.5
+    /// Smallest a column may get, in points. The width above is a fraction, so the same
+    /// number is a comfortable column on a wide display and a cramped one on a laptop.
+    /// Set to 0 to let the fraction stand whatever the screen.
+    var niriMinColumnWidth: CGFloat = 640
     /// How windows consumed into the same column are arranged inside it.
     ///
     /// "auto" splits along whichever side is longer, so the panes come out as square as
@@ -239,6 +243,7 @@ struct PanelessConfig {
                     let st = value.lowercased()
                     if st == "vertical" || st == "horizontal" || st == "auto" { config.niriColumnStack = st }
                 case "niri_column_width": config.niriColumnWidth = max(0.1, min(3.0, CGFloat(Double(value) ?? 1.0)))
+                case "niri_min_column_width": config.niriMinColumnWidth = max(0, min(4000, CGFloat(Double(value) ?? 640)))
                 case "focus_follows_app": config.focusFollowsApp = value != "false" && value != "0"
                 case "hyperkey":
                     let lower = value.lowercased()
@@ -533,6 +538,7 @@ struct PanelessConfig {
         lines.append("tiling_mode = \(tilingMode)")
         if tilingMode == "niri" {
             lines.append("niri_column_width = \(niriColumnWidth)")
+            lines.append("niri_min_column_width = \(Int(niriMinColumnWidth))")
             lines.append("niri_column_stack = \(niriColumnStack)")
             lines.append("niri_fill_screen = \(niriFillScreen)")
         }
