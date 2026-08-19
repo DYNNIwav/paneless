@@ -519,6 +519,10 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             # Vertical order within a niri column.
             alt+shift, j = niri_move_down
             alt+shift, k = niri_move_up
+            # Horizontal motion is always h and l, and the modifier says what moves:
+            # alt moves you, alt+shift moves the column, alt+ctrl moves the window.
+            alt+ctrl, h = niri_move_left
+            alt+ctrl, l = niri_move_right
             alt+shift, return = swap_master
             alt+shift, space = cycle_layout
             alt+shift, t = toggle_float
