@@ -6,7 +6,40 @@ set -e
 
 VERSION="${1:?Usage: ./Scripts/release.sh vX.Y.Z}"
 TEAM_ID="2WDPP87T4V"
-IDENTITY="Developer ID Application: Pål Omland Eilevstjønn ($TEAM_ID)"
+# Pick the signing certificate by hash, not by name.
+#
+# A team can hold several Developer ID Application certificates and every one of
+# them carries the exact same common name, so `codesign -s <name>` bails out with
+# "ambiguous (matches ...)". That is what happened when a G2 certificate was added
+# next to the older one. Resolving to a hash avoids it, and picking the longest
+# lived certificate means a renewal is used automatically without editing this.
+IDENTITY="$(
+  VALID="$(security find-identity -v -p codesigning | awk '/Developer ID Application/ { printf "%s ", $2 }')"
+  security find-certificate -a -c "Developer ID Application" -Z -p 2>/dev/null | awk -v valid="$VALID" '
+    /^SHA-1 hash:/ { hash = $3 }
+    /^-----BEGIN/  { pem = ""; in_pem = 1 }
+    in_pem         { pem = pem $0 "\n" }
+    /^-----END/    {
+      in_pem = 0
+      tmp = "/tmp/.paneless-release-cert.pem"
+      printf "%s", pem > tmp
+      close(tmp)
+      cmd = "openssl x509 -in " tmp " -noout -enddate | cut -d= -f2 | tr -s \" \""
+      cmd | getline expiry
+      close(cmd)
+      cmd = "date -j -f \"%b %d %H:%M:%S %Y %Z\" \"" expiry "\" +%s 2>/dev/null"
+      cmd | getline epoch
+      close(cmd)
+      if (epoch != "" && index(valid, hash) > 0) print epoch, hash
+    }
+  ' | sort -rn | head -1 | cut -d' ' -f2
+)"
+
+if [ -z "$IDENTITY" ]; then
+  echo "No usable Developer ID Application certificate in the keychain." >&2
+  echo "Create one in Xcode: Settings > Accounts > Manage Certificates > + " >&2
+  exit 1
+fi
 TAP_REPO="/tmp/homebrew-paneless"
 
 cd "$(dirname "$0")/.."
