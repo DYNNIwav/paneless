@@ -263,6 +263,10 @@ enum NativeTiling {
         return splitEvenly(first, count: a) + splitEvenly(second, count: b)
     }
 
+    /// Below this a stacked pane is too short to work in, and the column is carved up
+    /// along its longer side instead.
+    static let minimumStackedPaneHeight: CGFloat = 400
+
     static func calculateNiriFrames(
         columns: [NiriColumn],
         region: TilingRegion,
@@ -355,6 +359,30 @@ enum NativeTiling {
                 // is short and broad, so splitting its height twice leaves two letterbox
                 // strips, while splitting its width gives two usable panes.
                 if stackMode == "auto" {
+                    // Stack vertically for as long as the panes stay usable, and only
+                    // carve the column up when they would not be.
+                    //
+                    // This used to hand the column straight to splitEvenly, which cuts
+                    // whichever side is longer. A half-screen column on a wide display is
+                    // broader than it is tall, so two windows landed side by side there
+                    // while the same two stacked on a laptop. One key, opposite results,
+                    // decided by the screen you happened to be sitting at. Worse, it made
+                    // pulling a window into a column look exactly like leaving it in its
+                    // own, only narrower.
+                    let stackedHeight = region.height / CGFloat(windowCount)
+                    if stackedHeight >= minimumStackedPaneHeight {
+                        let windowHeight = region.height / CGFloat(windowCount)
+                        for (wi, wid) in col.windows.enumerated() {
+                            windowFrames.append((windowID: wid, frame: CGRect(
+                                x: colX + halfGap,
+                                y: region.y + windowHeight * CGFloat(wi) + halfGap,
+                                width: max(colW - gap, 100),
+                                height: max(windowHeight - gap, 100))))
+                        }
+                        results.append(NiriColumnResult(
+                            columnIndex: i, windowFrames: windowFrames, isVisible: isVisible))
+                        continue
+                    }
                     let column = CGRect(x: colX, y: region.y, width: colW, height: region.height)
                     for (wid, r) in zip(col.windows, splitEvenly(column, count: windowCount)) {
                         windowFrames.append((windowID: wid, frame: CGRect(

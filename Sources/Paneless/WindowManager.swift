@@ -1876,7 +1876,10 @@ class WindowManager: WindowObserverDelegate {
             // Leave the column and stand alone next to it.
             layoutEngine.niriColumns[ci].focusedIndex = min(ri, layoutEngine.niriColumns[ci].windows.count - 1)
             let at = right ? ci + 1 : ci
-            let col = NiriColumn(windows: [wid], widthOverride: layoutEngine.niriColumns[ci].widthOverride)
+            // A window leaving a column starts at the default width, the way niri does
+            // it. Inheriting the override turned one widened column into two, so the row
+            // grew a little wider every time a window was pushed out of one.
+            let col = NiriColumn(windows: [wid])
             layoutEngine.niriColumns.insert(col, at: at)
             layoutEngine.niriActiveColumn = at
         } else {
@@ -1952,7 +1955,9 @@ class WindowManager: WindowObserverDelegate {
         layoutEngine.niriColumns[ci].focusedIndex = min(ri, layoutEngine.niriColumns[ci].windows.count - 1)
 
         // Insert as new column to the right
-        let newCol = NiriColumn(windows: [wid], widthOverride: layoutEngine.niriColumns[ci].widthOverride)
+        // Expelled windows start at the default width rather than inheriting the width
+        // of the column they came from, which used to widen the row on every expel.
+        let newCol = NiriColumn(windows: [wid])
         layoutEngine.niriColumns.insert(newCol, at: ci + 1)
 
         // Move focus to the new column
