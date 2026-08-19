@@ -122,7 +122,7 @@ class Animator: NSObject {
     /// with slow apps like Messages).
     /// Move windows to their target positions.
     ///
-    /// Every window walks from its current frame to its target over `windowMoveDuration`,
+    /// Every window walks from its current frame to its target over its own duration,
     /// paced by the display link. This is the same thing macOS's own tiling does: measured
     /// on this machine, Apple animates the real window frame at roughly 115 updates/sec for
     /// a light window and 73/sec for Safari. There is no compositor shortcut available to
