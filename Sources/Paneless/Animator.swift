@@ -24,7 +24,7 @@ class Animator: NSObject {
     /// See Config.sizeOnce.
     var sizeOnce: Bool = false
     /// See Config.appDrivenAnimation.
-    var appDrivenAnimation: String = "off"
+    var appDrivenAnimation: String = "moves"
 
     /// Called with true when an animation starts and false when the last one ends.
     /// Lets the owner run the ProMotion keepalive only while it is worth anything.
@@ -268,10 +268,36 @@ class Animator: NSObject {
         // exactly what is wanted: 110fps from a single round trip per application instead
         // of a synchronous write per window per frame, on a main thread that has to reach
         // every other window in the same 8.33ms.
-        if appDrivenAnimation == "always"
-            || (appDrivenAnimation == "moves" && steps.allSatisfy { $0.moveOnly }) {
+        // Hand an isolated move to the application, and take the reins when it is not
+        // isolated.
+        //
+        // The two are good at different things. One write and the application eases the
+        // window itself at around 110fps in its own process, where ours writes to every
+        // visible window every frame, three hundred and sixty synchronous messages a
+        // second down a single thread. But the application's curve is its own: a second
+        // key press restarts it and there is no way in from outside, while ours can be
+        // pointed somewhere new while it moves. So the application gets the first step,
+        // and the moment a second arrives before the first has landed, we take over.
+        glideLock.lock()
+        let alreadyMoving = !glides.isEmpty
+        glideLock.unlock()
+        let handOver = appDrivenAnimation == "always"
+            || (appDrivenAnimation == "moves"
+                && steps.allSatisfy { $0.moveOnly }
+                && !alreadyMoving
+                && appDrivenWork == nil)
+        if handOver {
             startAppDrivenAnimation(steps, pids: pids)
         } else {
+            // Taking over from an application mid-animation: clear its bookkeeping first,
+            // or the attribute we turned on to let it animate would be restored on top of
+            // our own frames, and it would go on easing against every one of them.
+            if appDrivenWork != nil {
+                appDrivenWork?.cancel()
+                appDrivenWork = nil
+                AccessibilityBridge.setEnhancedUI(pids: appDrivenRestore, enabled: false)
+                appDrivenRestore = []
+            }
             startGlide(steps, targets: targets, pids: pids)
         }
     }

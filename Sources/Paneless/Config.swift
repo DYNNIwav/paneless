@@ -37,7 +37,7 @@ struct PanelessConfig {
     /// theirs: a second key press restarts it, and there is no way in from outside. Ours
     /// can be pointed somewhere new mid-flight while keeping its speed, which is what a
     /// fast scroll needs, so "off" is the default and the others are there to compare.
-    var appDrivenAnimation: String = "off"
+    var appDrivenAnimation: String = "moves"
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false

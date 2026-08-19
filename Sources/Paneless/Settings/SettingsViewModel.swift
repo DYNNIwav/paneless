@@ -23,7 +23,7 @@ class SettingsViewModel: ObservableObject {
     @Published var niriColumnStack: String = "auto"
     @Published var niriFillScreen: Bool = true
     @Published var sizeOnce: Bool = false
-    @Published var appDrivenAnimation: String = "off"
+    @Published var appDrivenAnimation: String = "moves"
 
     // MARK: - Border
 
