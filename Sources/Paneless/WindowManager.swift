@@ -1582,6 +1582,26 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Niri Scrolling Column Mode
 
     /// Core Niri retile: calculate column frames, animate visible windows, hide off-screen ones.
+    /// Move a window to its parked spot without paying for a size write.
+    ///
+    /// Parking went through the full setFrame, which writes the size twice, on either
+    /// side of the position, to satisfy applications that clamp one against the other. A
+    /// window being parked almost always keeps the size it already had, so both writes
+    /// buy nothing, and our own measurements put a size write at 25 to 53 milliseconds on
+    /// Safari against 0.2 to 2 for a move. Reading the frame first costs a fraction of
+    /// that and skips the expensive half whenever it cannot change anything.
+    private func park(_ element: AXUIElement, at frame: CGRect) {
+        let current = AccessibilityBridge.getFrame(of: element)
+        let sameSize = current.map {
+            abs($0.width - frame.width) < 2 && abs($0.height - frame.height) < 2
+        } ?? false
+        if sameSize {
+            AccessibilityBridge.setFrameDuringAnimation(of: element, to: frame, setSize: false)
+        } else {
+            AccessibilityBridge.setFrame(of: element, to: frame)
+        }
+    }
+
     /// Where a column goes when it is not on screen.
     ///
     /// Parking against the tiling region left the window inside the outer gap, so a
@@ -1643,7 +1663,7 @@ class WindowManager: WindowObserverDelegate {
                         windowID: wid, element: element,
                         startFrame: current, targetFrame: parked))
                 } else {
-                    AccessibilityBridge.setFrame(of: element, to: parked)
+                    park(element, at: parked)
                 }
             }
         }
@@ -1857,8 +1877,7 @@ class WindowManager: WindowObserverDelegate {
                 for (wid, frame) in colResult.windowFrames {
                     self.niriHiddenWindows.insert(wid)
                     guard let element = self.axElements[wid] else { continue }
-                    AccessibilityBridge.setFrame(
-                        of: element, to: self.niriParkedFrame(frame, region: region))
+                    self.park(element, at: self.niriParkedFrame(frame, region: region))
                 }
             }
             var known = self.observer.currentKnownWindows

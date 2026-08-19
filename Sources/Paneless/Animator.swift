@@ -217,7 +217,15 @@ class Animator: NSObject {
     private func startAnimation(_ steps: [Glide],
                                 targets: [(element: AXUIElement, frame: CGRect)],
                                 pids: Set<pid_t>) {
-        if appDrivenAnimation {
+        // Let the applications animate themselves whenever nothing is being resized.
+        //
+        // AXEnhancedUserInterface eases position and snaps size, which is why it is not
+        // the general answer. But a scroll along the strip changes no sizes at all, so the
+        // one thing it does badly never comes up, and the one thing it does well is
+        // exactly what is wanted: 110fps from a single round trip per application instead
+        // of a synchronous write per window per frame, on a main thread that has to reach
+        // every other window in the same 8.33ms.
+        if appDrivenAnimation || steps.allSatisfy({ $0.moveOnly }) {
             startAppDrivenAnimation(steps, pids: pids)
         } else {
             startGlide(steps, targets: targets, pids: pids)
@@ -279,7 +287,18 @@ class Animator: NSObject {
         glideLock.unlock()
 
         // A hung app must not be able to stall the loop for the multi-second AX default.
-        for step in steps { AccessibilityBridge.limitMessagingTime(of: step.element) }
+        // A glide that only moves a window gets a tight deadline; one that resizes keeps
+        // the generous one it needs.
+        //
+        // Every write here is synchronous, so an application that takes its time holds up
+        // the frame for all the others too. One timeout of a quarter of a second covered
+        // both cases, which is thirty frames' worth at 120Hz for a write that measures
+        // 0.2 to 2ms. This is a bound on the damage a hung application can do rather than
+        // a measured win: 30ms is still fifteen times what a move needs, while a resize is
+        // 25 to 53ms on Safari and would be cut off by anything tighter.
+        for step in steps {
+            AccessibilityBridge.limitMessagingTime(of: step.element, to: step.moveOnly ? 0.03 : 0.25)
+        }
 
         // Pay every resize once, here, rather than forty times during the animation.
         // The window snaps to its final size and then travels at full frame rate.
