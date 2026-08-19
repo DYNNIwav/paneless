@@ -334,7 +334,16 @@ enum NativeTiling {
             let colX = colXPositions[i] + offset
             let colW = colWidths[i]
 
-            let isVisible = (colX + colW) > screenLeft && colX < screenRight
+            // A column shows only when the whole of it fits. Partial columns counted as
+            // visible before, so whenever the strip overflowed, the column at the far end
+            // poked a few pixels out from under the window at the edge with nothing to
+            // cover it: CGSSetWindowAlpha is a silent no-op on another application's
+            // window, so position is the only thing that can hide one.
+            let fitsEntirely = colX >= screenLeft - 1 && (colX + colW) <= screenRight + 1
+            // A column too wide to ever fit still has to be drawn, or it would vanish.
+            let tooWideToFit = colW >= region.width - 1
+            let isVisible = fitsEntirely
+                || (tooWideToFit && (colX + colW) > screenLeft && colX < screenRight)
 
             // Divide height equally among windows in this column
             let windowCount = col.windows.count

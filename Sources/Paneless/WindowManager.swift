@@ -1508,11 +1508,20 @@ class WindowManager: WindowObserverDelegate {
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 
-        // Position off-screen windows at their strip locations (keeps positions correct for scroll animation)
+        // Park what is not on screen just past the edge it belongs to, leaving the one
+        // pixel macOS refuses to give up. These used to sit at their true position in the
+        // strip, which is why a column that only just missed the edge stayed in plain
+        // sight under the neighbouring window: nothing was covering it, because window
+        // alpha does not cross process boundaries.
         for colResult in results where !colResult.isVisible {
             for (wid, frame) in colResult.windowFrames {
                 guard let element = axElements[wid] else { continue }
-                AccessibilityBridge.setFrame(of: element, to: frame)
+                let parkedX = frame.midX < region.x + region.width / 2
+                    ? region.x - frame.width + 1
+                    : region.x + region.width - 1
+                AccessibilityBridge.setFrame(of: element, to: CGRect(
+                    x: parkedX, y: frame.origin.y,
+                    width: frame.width, height: frame.height))
             }
         }
 
@@ -1651,7 +1660,6 @@ class WindowManager: WindowObserverDelegate {
         guard col >= 0 && col < layoutEngine.niriColumns.count else { return }
 
         let region = getTilingRegion()
-        let conn = CGSMainConnectionID()
 
         // Cancel any pending hide from a previous scroll
         niriHideWorkItem?.cancel()
@@ -1672,17 +1680,13 @@ class WindowManager: WindowObserverDelegate {
             resultingScrollOffset: &layoutEngine.niriScrollOffset
         )
 
-        // Atomically restore alpha for windows about to become visible
-        // (they're already at their strip positions thanks to alpha-only hiding)
-        SLSDisableUpdate(conn)
+        // Windows about to come into view stop counting as hidden. There is nothing to
+        // un-fade here: what hides a column is where it sits, not its alpha.
         for colResult in results where colResult.isVisible {
             for (wid, _) in colResult.windowFrames {
-                if niriHiddenWindows.remove(wid) != nil {
-                    CGSSetWindowAlpha(conn, wid, 1.0)
-                }
+                niriHiddenWindows.remove(wid)
             }
         }
-        SLSReenableUpdate(conn)
 
         // Build transitions for visible + departing windows
         var transitions: [Animator.Transition] = []
@@ -1707,16 +1711,16 @@ class WindowManager: WindowObserverDelegate {
         // After animation, hide off-screen windows + position at strip locations
         let hideWork = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            let hConn = CGSMainConnectionID()
             for colResult in results where !colResult.isVisible {
                 for (wid, frame) in colResult.windowFrames {
-                    if !self.niriHiddenWindows.contains(wid) {
-                        self.niriHiddenWindows.insert(wid)
-                        CGSSetWindowAlpha(hConn, wid, 0.0)
-                    }
-                    if let element = self.axElements[wid] {
-                        AccessibilityBridge.setFrame(of: element, to: frame)
-                    }
+                    self.niriHiddenWindows.insert(wid)
+                    guard let element = self.axElements[wid] else { continue }
+                    let parkedX = frame.midX < region.x + region.width / 2
+                        ? region.x - frame.width + 1
+                        : region.x + region.width - 1
+                    AccessibilityBridge.setFrame(of: element, to: CGRect(
+                        x: parkedX, y: frame.origin.y,
+                        width: frame.width, height: frame.height))
                 }
             }
             var known = self.observer.currentKnownWindows
@@ -1742,19 +1746,19 @@ class WindowManager: WindowObserverDelegate {
     /// Hide off-screen windows and unhide on-screen ones for Niri mode.
     /// Uses alpha-only hiding so windows stay at their strip positions for smooth animation.
     private func niriUpdateVisibility(_ results: [NativeTiling.NiriColumnResult]) {
-        let conn = CGSMainConnectionID()
-
+        // Keep track of which windows are off screen, so the observer goes on knowing
+        // about them.
+        //
+        // This used to fade them out with CGSSetWindowAlpha, which reports success and
+        // does nothing whatsoever on a window owned by another process. Parking the
+        // window past the screen edge is what actually hides it. The alpha calls only
+        // made it look as though something was covering the ones still in view.
         for colResult in results {
             for (wid, _) in colResult.windowFrames {
                 if colResult.isVisible {
-                    if niriHiddenWindows.remove(wid) != nil {
-                        CGSSetWindowAlpha(conn, wid, 1.0)
-                    }
+                    niriHiddenWindows.remove(wid)
                 } else {
-                    if !niriHiddenWindows.contains(wid) {
-                        niriHiddenWindows.insert(wid)
-                        CGSSetWindowAlpha(conn, wid, 0.0)
-                    }
+                    niriHiddenWindows.insert(wid)
                 }
             }
         }
