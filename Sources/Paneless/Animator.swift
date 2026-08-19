@@ -24,7 +24,7 @@ class Animator: NSObject {
     /// See Config.sizeOnce.
     var sizeOnce: Bool = false
     /// See Config.appDrivenAnimation.
-    var appDrivenAnimation: String = "moves"
+    var appDrivenAnimation: String = "off"
 
     /// Called with true when an animation starts and false when the last one ends.
     /// Lets the owner run the ProMotion keepalive only while it is worth anything.
@@ -129,15 +129,29 @@ class Animator: NSObject {
     /// us, because SLSSetWindowTransform and CGSSetWindowAlpha both no-op on windows owned
     /// by another process, so the frame is the only thing that actually moves.
     func animate(_ transitions: [Transition]) {
-        cancelAll()
-        guard !transitions.isEmpty else { return }
+        // Take over whatever is still in the air rather than stopping it.
+        //
+        // This began with cancelAll, so every key press threw away a half finished
+        // animation and started the ease again from its fast opening. One press is
+        // invisible; six in a row is a pulse, and no amount of frame rate hides it. A
+        // window already travelling is now pointed at the new place instead, carrying the
+        // speed it had, so a fast scroll is one continuous movement that keeps changing
+        // its mind about where it ends.
+        glideLock.lock()
+        let inFlight = Dictionary(glides.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
+        glideLock.unlock()
+
+        guard !transitions.isEmpty else { cancelAll(); return }
 
         let targets = transitions.map { (element: $0.element, frame: $0.targetFrame) }
 
         guard enabled else {
+            cancelAll()
             AccessibilityBridge.batchSetFrames(targets)
             return
         }
+
+        let now = CACurrentMediaTime()
 
         var steps: [Glide] = []
         var pids = Set<pid_t>()
@@ -152,6 +166,13 @@ class Animator: NSObject {
             var pid: pid_t = 0
             AXUIElementGetPid(t.element, &pid)
             pids.insert(pid)
+
+            // Already moving: send it somewhere else instead of starting it over.
+            if let live = inFlight[t.windowID] {
+                retarget(live, to: t.targetFrame, now: now)
+                steps.append(live)
+                continue
+            }
             // A new arrival leads and may swing past its mark; the others follow in a
             // short cascade, which reads as choreography rather than everything lurching
             // at once. Both are free: it only changes when each write is issued.
@@ -172,19 +193,31 @@ class Animator: NSObject {
     // MARK: - Frame Glide
 
     /// A reference type because the animation learns about the window as it runs.
+    /// Rate of change of a frame, in points per second.
+    struct Motion {
+        var dx: CGFloat = 0, dy: CGFloat = 0, dw: CGFloat = 0, dh: CGFloat = 0
+        var isStill: Bool { abs(dx) < 1 && abs(dy) < 1 && abs(dw) < 1 && abs(dh) < 1 }
+    }
+
     final class Glide {
         let windowID: CGWindowID
         let element: AXUIElement
-        let from: CGRect
-        let to: CGRect
+        var from: CGRect
+        var to: CGRect
+        /// When this window started its current leg. Each glide keeps its own clock, so
+        /// one window can be given a new target without disturbing the others.
+        var startedAt: CFTimeInterval = 0
+        /// How fast it was already travelling when the current leg began, in points per
+        /// second. Nil for a standing start, which keeps the ordinary ease.
+        var entryVelocity: Motion?
         /// The window travels without changing size, so kAXSize is never written.
-        let moveOnly: Bool
+        var moveOnly: Bool
         /// How long this window takes. A scroll along the strip wants to be over before
         /// the next key arrives; a reflow, where windows change size and swap places, is
         /// worth watching. One duration for both meant every scroll was still running when
         /// the next one cancelled it, so the curve restarted from its fast opening again
         /// and again, which reads as a pulse rather than as motion.
-        let duration: CFTimeInterval
+        var duration: CFTimeInterval
         /// Set once the app has demonstrated it will not take the size we ask for.
         /// Fixed-size windows and windows that snap to a character grid, like terminals,
         /// otherwise cost a full resize per frame and ignore every one of them.
@@ -216,7 +249,6 @@ class Animator: NSObject {
 
     private var glides: [Glide] = []
     private var glideTargets: [(element: AXUIElement, frame: CGRect)] = []
-    private var glideStartTime: CFTimeInterval = 0
     private var restoreEnhancedUI: Set<pid_t> = []
     private var displayLink: CVDisplayLink?
     private let glideLock = NSLock()
@@ -292,9 +324,10 @@ class Animator: NSObject {
                             targets: [(element: AXUIElement, frame: CGRect)],
                             pids: Set<pid_t>) {
         glideLock.lock()
+        let now = CACurrentMediaTime()
+        for step in steps where step.startedAt == 0 { step.startedAt = now }
         glides = steps
         glideTargets = targets
-        glideStartTime = CACurrentMediaTime()
         busyWindows.removeAll()
         glideLock.unlock()
 
@@ -343,26 +376,83 @@ class Animator: NSObject {
         CVDisplayLinkStart(link)
     }
 
+    /// Where a glide should be at `u`, its own progress from 0 to 1.
+    ///
+    /// A standing start keeps the ordinary ease. One that was given a new target while
+    /// already moving carries the speed it had into a cubic Hermite, which begins at
+    /// exactly that speed and still arrives at rest. Restarting the ease instead made the
+    /// window leap forward again from its fast opening, and over a quick scroll that
+    /// repeats often enough to read as a pulse rather than as movement.
+    private func frame(of g: Glide, at u: CGFloat) -> CGRect {
+        guard let v = g.entryVelocity, !v.isStill else {
+            let e = g.overshoot ? easeOutBack(u) : easeOut.evaluate(u)
+            return CGRect(
+                x: g.from.origin.x + (g.to.origin.x - g.from.origin.x) * e,
+                y: g.from.origin.y + (g.to.origin.y - g.from.origin.y) * e,
+                width: g.from.width + (g.to.width - g.from.width) * e,
+                height: g.from.height + (g.to.height - g.from.height) * e)
+        }
+        let d = CGFloat(g.duration)
+        let u2 = u * u, u3 = u2 * u
+        let carry = u3 - 2 * u2 + u     // what the speed it arrived with is still worth
+        let reach = 3 * u2 - 2 * u3     // how much of the remaining distance is covered
+        func axis(_ p0: CGFloat, _ p1: CGFloat, _ v0: CGFloat) -> CGFloat {
+            p0 + v0 * d * carry + (p1 - p0) * reach
+        }
+        return CGRect(
+            x: axis(g.from.origin.x, g.to.origin.x, v.dx),
+            y: axis(g.from.origin.y, g.to.origin.y, v.dy),
+            width: axis(g.from.width, g.to.width, v.dw),
+            height: axis(g.from.height, g.to.height, v.dh))
+    }
+
+    /// How fast a glide is travelling at `u`, read off the curve itself so it stays right
+    /// whichever curve that is.
+    private func motion(of g: Glide, at u: CGFloat) -> Motion {
+        let step: CGFloat = 0.01
+        let lo = max(0, u - step), hi = min(1, u + step)
+        let dt = (hi - lo) * CGFloat(g.duration)
+        guard dt > 0 else { return Motion() }
+        let a = frame(of: g, at: lo), b = frame(of: g, at: hi)
+        return Motion(dx: (b.origin.x - a.origin.x) / dt,
+                      dy: (b.origin.y - a.origin.y) / dt,
+                      dw: (b.width - a.width) / dt,
+                      dh: (b.height - a.height) / dt)
+    }
+
+    /// Point a glide somewhere new without stopping it first.
+    private func retarget(_ g: Glide, to target: CGRect, now: CFTimeInterval) {
+        let u = min(max(CGFloat((now - g.startedAt - g.delay) / g.duration), 0), 1)
+        let here = frame(of: g, at: u)
+        g.entryVelocity = motion(of: g, at: u)
+        g.from = here
+        g.to = target
+        g.startedAt = now
+        g.delay = 0
+        g.overshoot = false
+        g.moveOnly = abs(here.width - target.width) < 2 && abs(here.height - target.height) < 2
+        g.duration = g.moveOnly ? Animator.moveDuration : Animator.reflowDuration
+    }
+
     private func glideTick() {
         glideLock.lock()
         let steps = glides
-        let started = glideStartTime
         glideLock.unlock()
 
         guard !steps.isEmpty else { return }
 
-        let elapsed = CACurrentMediaTime() - started
-        let lastDelay = steps.map(\.delay).max() ?? 0
-        if elapsed >= (glides.map { $0.duration }.max() ?? Animator.reflowDuration) + lastDelay {
+        let now = CACurrentMediaTime()
+        // Every window keeps its own clock, so one can be sent somewhere new without
+        // disturbing the timing of the others.
+        if steps.allSatisfy({ now - $0.startedAt >= $0.duration + $0.delay }) {
             DispatchQueue.main.async { [weak self] in self?.finishGlide(commit: true) }
             return
         }
 
         for g in steps {
             // Each window runs its own clock, offset by its place in the reflow.
-            let own = min(max((elapsed - g.delay) / g.duration, 0), 1)
+            let own = min(max(CGFloat((now - g.startedAt - g.delay) / g.duration), 0), 1)
             guard own > 0 else { continue }
-            let e = g.overshoot ? easeOutBack(CGFloat(own)) : easeOut.evaluate(CGFloat(own))
             // Skip any window still busy with its previous write. A slow app then simply
             // updates less often instead of backing up a queue of stale frames.
             glideLock.lock()
@@ -371,12 +461,7 @@ class Animator: NSObject {
             glideLock.unlock()
             guard !busy else { continue }
 
-            let rect = CGRect(
-                x: g.from.origin.x + (g.to.origin.x - g.from.origin.x) * e,
-                y: g.from.origin.y + (g.to.origin.y - g.from.origin.y) * e,
-                width: g.from.width + (g.to.width - g.from.width) * e,
-                height: g.from.height + (g.to.height - g.from.height) * e
-            )
+            let rect = frame(of: g, at: own)
             guard AccessibilityBridge.isPlausibleFrame(rect) else {
                 glideLock.lock(); busyWindows.remove(g.windowID); glideLock.unlock()
                 continue

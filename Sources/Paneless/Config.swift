@@ -33,9 +33,11 @@ struct PanelessConfig {
     /// bezier, and position animates while size still snaps.
     /// Who animates a window's movement: "off" for our own frame-by-frame glide,
     /// "moves" to hand a pure move to the application itself, "always" to hand it
-    /// everything. Applications ease position well and snap size, which is why "moves"
-    /// is the default rather than "always".
-    var appDrivenAnimation: String = "moves"
+    /// everything. Applications ease position well and snap size, but their curve is
+    /// theirs: a second key press restarts it, and there is no way in from outside. Ours
+    /// can be pointed somewhere new mid-flight while keeping its speed, which is what a
+    /// fast scroll needs, so "off" is the default and the others are there to compare.
+    var appDrivenAnimation: String = "off"
 
     // Force ProMotion to stay at 120Hz (keeps a CVDisplayLink running)
     var forceProMotion: Bool = false
