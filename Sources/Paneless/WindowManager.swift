@@ -118,6 +118,9 @@ class WindowManager: WindowObserverDelegate {
     // Every window that has ever been tiled. Window ids are never reused within a
     // login session, so this only grows by a few bytes per window and never lies.
     private var onceTiled = Set<CGWindowID>()
+    /// Floating windows already moved to the middle once. A window returning from Cmd+H
+    /// or a minimise is offered as new, and must stay wherever the user left it.
+    private var onceCentered = Set<CGWindowID>()
 
     // A niri window's measured minimum width, for windows that refuse to be as narrow
     // as their column. Filled in by the poll, read by the niri layout so the column
@@ -938,6 +941,29 @@ class WindowManager: WindowObserverDelegate {
         retile()
     }
 
+    /// Move a new floating window to the exact middle of the screen being worked on,
+    /// once. Never again afterwards, so it is never pulled back from where it is dragged.
+    private func centerOnWorkingScreen(_ windowID: CGWindowID, element: AXUIElement) {
+        guard onceCentered.insert(windowID).inserted,
+              let frame = AccessibilityBridge.getFrame(of: element) else { return }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let screens = NSScreen.screens.map {
+            ScreenRects(
+                frame: FloatPlacement.axRect(fromCocoa: $0.frame, primaryHeight: primaryHeight),
+                visible: FloatPlacement.axRect(fromCocoa: $0.visibleFrame, primaryHeight: primaryHeight)
+            )
+        }
+        let focusedFrame = focusedWindowID
+            .flatMap { axElements[$0] }
+            .flatMap { AccessibilityBridge.getFrame(of: $0) }
+        let mouse = CGEvent(source: nil)?.location ?? .zero
+        guard let screen = FloatPlacement.workingScreen(focusedFrame: focusedFrame, mouse: mouse, screens: screens)
+        else { return }
+        let target = FloatPlacement.centeredFrame(size: frame.size, on: screen)
+        panelessLog("Centering floating window \(windowID): \(frame) -> \(target)")
+        AccessibilityBridge.setFrame(of: element, to: target)
+    }
+
     // MARK: - WindowObserverDelegate
 
     /// Restore window alpha that was pre-emptively set to 0 by the AX observer.
@@ -1021,6 +1047,19 @@ class WindowManager: WindowObserverDelegate {
                     panelessLog("Auto-floating secondary window from \(appName) (\(windowID))")
                 }
             }
+        }
+
+        // Settle what kind of window this is: tiled, floated in the middle of the screen
+        // being worked on, or left exactly where the app put it (sheets, the Quick
+        // Terminal, menus and popups). Mail's compose windows float too.
+        let placement = FloatPlacement.placement(
+            for: AccessibilityBridge.traits(of: element, bundleID: bundleID),
+            floatsByRule: shouldFloat,
+            tiledBefore: tiledBefore
+        )
+        if placement != .tile, !shouldFloat {
+            shouldFloat = true
+            panelessLog("Floating \(appName) (\(windowID)) by placement \(placement)")
         }
 
         // Mark as sticky if app matches sticky rules
@@ -1119,6 +1158,7 @@ class WindowManager: WindowObserverDelegate {
 
         if shouldFloat {
             floatingWindows.insert(windowID)
+            if placement == .floatCentered { centerOnWorkingScreen(windowID, element: element) }
             restoreWindowAlpha(windowID)
         } else {
             // The window joins the layout of the display it opened on. It used to join

@@ -16,6 +16,11 @@ let package = Package(
                 .linkedFramework("CoreVideo"),
                 .unsafeFlags(["-F/System/Library/PrivateFrameworks", "-framework", "SkyLight"])
             ]
+        ),
+        .testTarget(
+            name: "PanelessTests",
+            dependencies: ["Paneless"],
+            path: "Tests/PanelessTests"
         )
     ]
 )
