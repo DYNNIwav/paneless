@@ -68,6 +68,7 @@ unset -f xcrun
 paneless_release_cask v0.7.0 20260930.120001 abc123 > "$fixture/paneless.rb"
 rg -Fq 'auto_updates true' "$fixture/paneless.rb"
 rg -Fq 'depends_on arch: :arm64' "$fixture/paneless.rb"
+rg -Fq 'depends_on macos: :sonoma' "$fixture/paneless.rb"
 rg -Fq 'Paneless-20260930.120001.zip' "$fixture/paneless.rb"
 rg -Fq 'target: "paneless"' "$fixture/paneless.rb"
 
