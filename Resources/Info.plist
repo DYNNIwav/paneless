@@ -18,6 +18,20 @@
 	<string>0.6.0</string>
 	<key>CFBundleVersion</key>
 	<string>0.6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/DYNNIwav/paneless/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>kSBvcOR6h72M/SFuZ8FqrRTgOxeh1OqqS1NCl4Zwnbo=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
