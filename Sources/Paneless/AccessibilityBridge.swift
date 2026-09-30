@@ -82,6 +82,14 @@ enum AccessibilityBridge {
         }
     }
 
+    /// A minimum-width probe needs the resize acknowledgement, unlike animation writes.
+    static func resizeForMeasurement(_ element: AXUIElement, to rect: CGRect) -> Bool {
+        guard isPlausibleFrame(rect) else { return false }
+        var size = rect.size
+        guard let value = AXValueCreate(.cgSize, &size) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) == .success
+    }
+
     /// Whether a frame is safe to hand to another application.
     ///
     /// Not defensive programming for its own sake. On 18 August 2026 this machine

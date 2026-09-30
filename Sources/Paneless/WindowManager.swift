@@ -125,7 +125,11 @@ class WindowManager: WindowObserverDelegate {
     // A niri window's measured minimum width, for windows that refuse to be as narrow
     // as their column. Filled in by the poll, read by the niri layout so the column
     // widens to fit rather than letting the window overlap the next one.
-    private var niriMinWidth: [CGWindowID: CGFloat] = [:]
+    private var niriWidths = NiriMinimumWidths()
+    private var niriMinWidth: [CGWindowID: CGFloat] {
+        get { niriWidths.widths }
+        set { niriWidths.widths = newValue }
+    }
 
     // The monitor whose active workspace is currently loaded into the live set
     // (trackedWindows / axElements / layoutEngine). Used to migrate state when a
@@ -1237,46 +1241,51 @@ class WindowManager: WindowObserverDelegate {
             }
         }
 
-        measureNiriMinWidths(frames: frames)
+        measureNiriMinWidths()
     }
 
-    /// Learn which niri windows refuse to be as narrow as their column, so the column
-    /// can widen to fit them. macOS does not report a window's minimum width, so it is
-    /// measured: lay the strip out, then see which windows came back wider than the share
-    /// we gave them. Skip while an animation or a divider drag is in flight, when a width
-    /// read would be mid-move.
-    ///
-    /// Only ever grows the recorded width, and records the window's own rendered width,
-    /// which the window then accepts unchanged, so it settles after one retile. A clear
-    /// or shrink path here would fight a terminal that rounds its width down to a
-    /// character cell: give it back the space, it snaps narrow again, and the column
-    /// jitters on every poll. A window that no longer needs the width just keeps a
-    /// slightly wide column until it closes, which nobody notices.
-    private func measureNiriMinWidths(frames: [CGWindowID: CGRect]) {
-        guard config.niriMode, !Animator.shared.isAnimating, !isResizing,
-              !layoutEngine.niriColumns.isEmpty else { return }
-
-        let region = getTilingRegion()
-        var offset = layoutEngine.niriScrollOffset
-        let allocated = NativeTiling.calculateNiriFrames(
-            columns: layoutEngine.niriColumns, region: region, gap: config.innerGap,
-            activeColumn: layoutEngine.niriActiveColumn,
-            defaultColumnWidth: config.niriColumnWidth,
+    /// Membership, monitor geometry or a deliberate width change starts a new probe.
+    /// Focus-only scrolling keeps identical target sizes, retaining terminal floors.
+    @discardableResult
+    private func prepareNiriWidths(engine: LayoutEngine) -> Bool {
+        var offset = engine.niriScrollOffset
+        let baseline = NativeTiling.calculateNiriFrames(
+            columns: engine.niriColumns, region: region(for: engine), gap: config.innerGap,
+            activeColumn: engine.niriActiveColumn, defaultColumnWidth: config.niriColumnWidth,
             minColumnWidth: config.niriMinColumnWidth, stackMode: config.niriColumnStack,
-            scrollOffset: layoutEngine.niriScrollOffset, fillScreen: config.niriFillScreen,
-            minWidthByWindow: niriMinWidth, resultingScrollOffset: &offset)
+            scrollOffset: offset, fillScreen: config.niriFillScreen,
+            resultingScrollOffset: &offset)
+        var sizes: [CGWindowID: CGSize] = [:]
+        for column in baseline {
+            for (id, frame) in column.windowFrames { sizes[id] = frame.size }
+        }
+        return niriWidths.prepare(monitor: engine.monitorID, targets: sizes)
+    }
 
-        let tolerance: CGFloat = 4
+    /// Never learn a floor from the poll's pre-layout CG snapshot. Confirm a successful
+    /// AX resize twice after animation settles, independently on each monitor.
+    private func measureNiriMinWidths() {
+        guard config.niriMode, !Animator.shared.isAnimating, !isResizing else {
+            niriWidths.suspend()
+            return
+        }
         var changed = false
-        for colResult in allocated where colResult.isVisible {
-            for (wid, allocFrame) in colResult.windowFrames {
-                guard let actual = frames[wid] else { continue }
-                if actual.width > allocFrame.width + tolerance,
-                   (niriMinWidth[wid] ?? 0) < actual.width - tolerance {
-                    niriMinWidth[wid] = actual.width
-                    changed = true
-                    let name = trackedWindows[wid]?.appName ?? "?"
-                    panelessLog("Window \(wid) (\(name)) rendered \(Int(actual.width)) wide in a \(Int(allocFrame.width)) column, widening the column to fit")
+        for engine in layoutEngines.values where !engine.niriColumns.isEmpty {
+            changed = prepareNiriWidths(engine: engine) || changed
+            var offset = engine.niriScrollOffset
+            let allocated = NativeTiling.calculateNiriFrames(
+                columns: engine.niriColumns, region: region(for: engine), gap: config.innerGap,
+                activeColumn: engine.niriActiveColumn, defaultColumnWidth: config.niriColumnWidth,
+                minColumnWidth: config.niriMinColumnWidth, stackMode: config.niriColumnStack,
+                scrollOffset: offset, fillScreen: config.niriFillScreen,
+                minWidthByWindow: niriMinWidth, resultingScrollOffset: &offset)
+            for column in allocated where column.isVisible {
+                for (id, target) in column.windowFrames {
+                    guard let element = axElements[id] else { continue }
+                    let confirmed = niriWidths.observe(id, target: target, settled: true,
+                        read: { AccessibilityBridge.getFrame(of: element) },
+                        resize: { AccessibilityBridge.resizeForMeasurement(element, to: $0) })
+                    changed = confirmed || changed
                 }
             }
         }
@@ -1366,7 +1375,7 @@ class WindowManager: WindowObserverDelegate {
         floatingWindows.remove(windowID)
         fullscreenWindows.remove(windowID)
         stickyWindows.remove(windowID)
-        niriMinWidth.removeValue(forKey: windowID)
+        niriWidths.remove(windowID)
         if dimmedWindows.remove(windowID) != nil {
             var wids: [CGWindowID] = [windowID]
             var values: [Float] = [0.0]
@@ -1449,7 +1458,7 @@ class WindowManager: WindowObserverDelegate {
         if let terminalWID = swallowedWindows.removeValue(forKey: windowID) {
             WorkspaceManager.shared.releaseSwallowed(terminalWID)
         }
-        niriMinWidth.removeValue(forKey: windowID)
+        niriWidths.remove(windowID)
         WorkspaceManager.shared.forget(windowID)
         panelessLog("Window \(windowID) closed while parked, dropped from its workspace")
     }
@@ -1821,6 +1830,8 @@ class WindowManager: WindowObserverDelegate {
         // parked off-screen, which looks like it has vanished.
         engine.reconcileColumns()
 
+        prepareNiriWidths(engine: engine)
+
         let region = region(for: engine)
         let results = NativeTiling.calculateNiriFrames(
             columns: engine.niriColumns,
@@ -1892,6 +1903,7 @@ class WindowManager: WindowObserverDelegate {
 
     /// Niri retile with scale-in animation for a new window.
     private func retileNiriWithScaleIn(newWindowID: CGWindowID) {
+        prepareNiriWidths(engine: layoutEngine)
         let region = getTilingRegion()
         let results = NativeTiling.calculateNiriFrames(
             columns: layoutEngine.niriColumns,
