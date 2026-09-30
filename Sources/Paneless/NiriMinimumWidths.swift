@@ -4,7 +4,7 @@ import CoreGraphics
 struct NiriMinimumWidths {
     var widths: [CGWindowID: CGFloat] = [:]
     private var targetsByMonitor: [String: [CGWindowID: CGSize]] = [:]
-    private var candidates: [CGWindowID: CGFloat] = [:]
+    private var candidates: [CGWindowID: CGSize] = [:]
     private var attempts: [CGWindowID: Int] = [:]
 
     mutating func suspend() { candidates.removeAll() }
@@ -44,13 +44,13 @@ struct NiriMinimumWidths {
         }
         guard actual.width > target.width + 4, (attempts[id] ?? 0) < 3 else { return false }
         attempts[id, default: 0] += 1
-        guard resize(target), let after = read(), after.width > target.width + 4,
-              abs(after.height - target.height) <= 4 else {
+        guard resize(target), let after = read(), after.width > target.width + 4 else {
             candidates.removeValue(forKey: id)
             return false
         }
-        guard let previous = candidates[id], abs(previous - after.width) <= 4 else {
-            candidates[id] = after.width
+        guard let previous = candidates[id], abs(previous.width - after.width) <= 4,
+              abs(previous.height - after.height) <= 4 else {
+            candidates[id] = after.size
             return false
         }
         widths[id] = after.width

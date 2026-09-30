@@ -39,6 +39,16 @@ import Testing
         #expect(policy.widths[1] == 2100)
     }
 
+    @Test func genuineWidthMinimumAlsoAllowsClampedHeight() {
+        var policy = NiriMinimumWidths()
+        let target = CGRect(x: 8, y: 25, width: 1896, height: 500)
+        let actual = CGRect(x: 8, y: 25, width: 2100, height: 720)
+        for _ in 0..<2 {
+            _ = policy.observe(1, target: target, settled: true, read: { actual }, resize: { _ in true })
+        }
+        #expect(policy.widths[1] == 2100)
+    }
+
     @Test func changingPostWriteFramesNeverEstablishMinimumAndRetriesAreBounded() {
         var policy = NiriMinimumWidths()
         var width: CGFloat = 3816
