@@ -42,7 +42,8 @@ struct NiriMinimumWidths {
             attempts.removeValue(forKey: id)
             return true
         }
-        guard actual.width > target.width + 4, (attempts[id] ?? 0) < 3 else { return false }
+        guard actual.width > max(target.width, widths[id] ?? 0) + 4,
+              (attempts[id] ?? 0) < 3 else { return false }
         attempts[id, default: 0] += 1
         guard resize(target), let after = read(), after.width > target.width + 4 else {
             candidates.removeValue(forKey: id)
@@ -55,6 +56,8 @@ struct NiriMinimumWidths {
         }
         widths[id] = after.width
         candidates.removeValue(forKey: id)
+        // A confirmed floor completes this episode. Future growth gets fresh evidence.
+        attempts.removeValue(forKey: id)
         return true
     }
 }

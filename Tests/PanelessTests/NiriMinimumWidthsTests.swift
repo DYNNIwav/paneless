@@ -49,6 +49,26 @@ import Testing
         #expect(policy.widths[1] == 2100)
     }
 
+    @Test func confirmedMinimumCanGrowRepeatedlyWithoutChangingLayout() {
+        var policy = NiriMinimumWidths()
+        _ = policy.prepare(monitor: "left", targets: [1: half.size])
+        var target = half
+        for width: CGFloat in [2100, 2300, 2500] {
+            let actual = CGRect(x: target.minX, y: target.minY, width: width, height: target.height)
+            for _ in 0..<2 {
+                _ = policy.observe(1, target: target, settled: true, read: { actual }, resize: { _ in true })
+            }
+            #expect(policy.widths[1] == width)
+            target.size.width = width
+        }
+        var writes = 0
+        for _ in 0..<10 {
+            _ = policy.observe(1, target: target, settled: true, read: { target },
+                               resize: { _ in writes += 1; return true })
+        }
+        #expect(writes == 0)
+    }
+
     @Test func changingPostWriteFramesNeverEstablishMinimumAndRetriesAreBounded() {
         var policy = NiriMinimumWidths()
         var width: CGFloat = 3816
