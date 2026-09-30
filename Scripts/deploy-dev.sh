@@ -31,6 +31,9 @@ swift build
 
 echo "Installing to $APP"
 cp .build/debug/Paneless "$APP/Contents/MacOS/Paneless"
+BIN_DIR="$(swift build --show-bin-path)"
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
 echo "Signing as: $IDENTITY"
 codesign --force --deep --sign "$IDENTITY" "$APP"
