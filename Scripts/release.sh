@@ -102,7 +102,7 @@ paneless_release_cask() {
     printf 'cask "paneless" do\n  version "%s"\n  sha256 "%s"\n' "${1#v}" "$3"
     printf '  url "https://github.com/%s/releases/download/%s/Paneless-%s.zip"\n' "$PANELESS_RELEASE_REPO" "$1" "$2"
     printf '  name "Paneless"\n  desc "Tiling window manager for macOS"\n  homepage "https://github.com/%s"\n' "$PANELESS_RELEASE_REPO"
-    printf '  auto_updates true\n  depends_on macos: ">= :sonoma"\n  app "Paneless.app"\n'
+    printf '  auto_updates true\n  depends_on arch: :arm64\n  depends_on macos: ">= :sonoma"\n  app "Paneless.app"\n'
     printf '  binary "#{appdir}/Paneless.app/Contents/MacOS/Paneless", target: "paneless"\nend\n'
 }
 
