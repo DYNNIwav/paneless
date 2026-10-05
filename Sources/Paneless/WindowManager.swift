@@ -788,29 +788,27 @@ class WindowManager: WindowObserverDelegate {
             let startFrame: CGRect
             let isNew: Bool
             if w.windowID == newWindowID {
-                // Start where the window actually is. We cannot hide a window before
-                // its first paint: the alpha pre-hide is a no-op on other processes'
-                // windows, so the app's own placement is always visible for a moment.
-                // Teleporting from there to a scaled copy of the target and animating
-                // the rest reads as a jump. Gliding from where it already sits is one
-                // continuous movement instead, which is the closest we get to a
-                // compositor placing it before anyone sees it.
-                //
-                // Only fall back to the centred popin when the window has no readable
-                // frame yet, where there is nothing to glide from.
-                if let actual = AccessibilityBridge.getFrame(of: w.element),
-                   AccessibilityBridge.isPlausibleFrame(actual) {
-                    startFrame = actual
-                } else {
-                    let scale: CGFloat = 0.80
-                    startFrame = CGRect(
-                        x: target.midX - target.width * scale / 2,
-                        y: target.midY - target.height * scale / 2,
-                        width: target.width * scale,
-                        height: target.height * scale
-                    )
+                let actual = AccessibilityBridge.getFrame(of: w.element).flatMap {
+                    AccessibilityBridge.isPlausibleFrame($0) ? $0 : nil
                 }
-                isNew = true
+                if let settled = ScaleIn.settledStart(target: target, actual: actual,
+                                                      tiledBefore: onceTiled.contains(w.windowID)) {
+                    startFrame = settled
+                    isNew = false
+                } else {
+                    // Start where the window actually is. We cannot hide a window before
+                    // its first paint: the alpha pre-hide is a no-op on other processes'
+                    // windows, so the app's own placement is always visible for a moment.
+                    // Teleporting from there to a scaled copy of the target and animating
+                    // the rest reads as a jump. Gliding from where it already sits is one
+                    // continuous movement instead, which is the closest we get to a
+                    // compositor placing it before anyone sees it.
+                    //
+                    // Only fall back to the centred popin when the window has no readable
+                    // frame yet, where there is nothing to glide from.
+                    startFrame = actual ?? ScaleIn.popin(target)
+                    isNew = true
+                }
             } else {
                 startFrame = AccessibilityBridge.getFrame(of: w.element) ?? target
                 isNew = false
@@ -1917,14 +1915,17 @@ class WindowManager: WindowObserverDelegate {
                 let startFrame: CGRect
                 let isNew: Bool
                 if wid == newWindowID {
-                    let scale: CGFloat = 0.80
-                    startFrame = CGRect(
-                        x: frame.midX - frame.width * scale / 2,
-                        y: frame.midY - frame.height * scale / 2,
-                        width: frame.width * scale,
-                        height: frame.height * scale
-                    )
-                    isNew = true
+                    let actual = AccessibilityBridge.getFrame(of: element).flatMap {
+                        AccessibilityBridge.isPlausibleFrame($0) ? $0 : nil
+                    }
+                    if let settled = ScaleIn.settledStart(target: frame, actual: actual,
+                                                          tiledBefore: onceTiled.contains(wid)) {
+                        startFrame = settled
+                        isNew = false
+                    } else {
+                        startFrame = ScaleIn.popin(frame)
+                        isNew = true
+                    }
                 } else {
                     startFrame = AccessibilityBridge.getFrame(of: element) ?? frame
                     isNew = false
