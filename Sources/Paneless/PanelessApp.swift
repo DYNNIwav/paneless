@@ -51,6 +51,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
 
     // Debounce: coalesce rapid status bar updates into one per runloop cycle
     private var needsStatusBarUpdate = false
+    @MainActor private lazy var updater = PanelessUpdater()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -177,7 +178,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu Bar
 
-    private func setupMenuBar() {
+    @MainActor private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
@@ -187,47 +188,10 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
 
         rebuildMenu()
 
-        // Once a day at most, and never in the way of anything.
-        UpdateChecker.shared.checkIfDue { [weak self] in self?.rebuildMenu() }
+        updater.start()
     }
 
-    @objc private func showUpdate(_ sender: Any?) {
-        let checker = UpdateChecker.shared
-        let alert = NSAlert()
-        alert.messageText = "Paneless \(checker.availableVersion ?? "") is available"
-
-        switch checker.installSource {
-        case .homebrew:
-            // Homebrew is tracking this install, so replacing the app here would leave
-            // it out of step. Hand over the command instead.
-            alert.informativeText = "You have \(checker.currentVersion). This copy was installed "
-                + "with Homebrew, which keeps track of the version, so update it there:"
-                + "\n\n\(checker.upgradeCommand)"
-            alert.addButton(withTitle: "Copy Command")
-            alert.addButton(withTitle: "Release Notes")
-            alert.addButton(withTitle: "Later")
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(checker.upgradeCommand, forType: .string)
-            case .alertSecondButtonReturn:
-                if let url = checker.downloadURL { NSWorkspace.shared.open(url) }
-            default: break
-            }
-
-        case .direct:
-            // Nothing else is tracking this copy, so a download link is the whole answer.
-            alert.informativeText = "You have \(checker.currentVersion). Download the new "
-                + "version and replace Paneless in your Applications folder."
-            alert.addButton(withTitle: "Download")
-            alert.addButton(withTitle: "Later")
-            if alert.runModal() == .alertFirstButtonReturn, let url = checker.downloadURL {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-
-    private func rebuildMenu() {
+    @MainActor private func rebuildMenu() {
         let menu = NSMenu()
         menu.delegate = self
 
@@ -243,13 +207,8 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem.separator())
         }
 
-        if let newVersion = UpdateChecker.shared.availableVersion {
-            let item = NSMenuItem(title: "Update available: \(newVersion)",
-                                  action: #selector(showUpdate(_:)), keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-            menu.addItem(NSMenuItem.separator())
-        }
+        menu.addItem(updater.menuItem())
+        menu.addItem(NSMenuItem.separator())
 
         let retileItem = NSMenuItem(title: "Retile", action: #selector(retile(_:)), keyEquivalent: "")
         retileItem.target = self
