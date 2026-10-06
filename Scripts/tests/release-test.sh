@@ -66,11 +66,11 @@ paneless_release_notarize v0.7.0 "$fixture/notary" 20260930.120001
 unset -f xcrun
 
 paneless_release_cask v0.7.0 20260930.120001 abc123 > "$fixture/paneless.rb"
-rg -Fq 'auto_updates true' "$fixture/paneless.rb"
-rg -Fq 'depends_on arch: :arm64' "$fixture/paneless.rb"
-rg -Fq 'depends_on macos: :sonoma' "$fixture/paneless.rb"
-rg -Fq 'Paneless-20260930.120001.zip' "$fixture/paneless.rb"
-rg -Fq 'target: "paneless"' "$fixture/paneless.rb"
+grep -Fq 'auto_updates true' "$fixture/paneless.rb"
+grep -Fq 'depends_on arch: :arm64' "$fixture/paneless.rb"
+grep -Fq 'depends_on macos: :sonoma' "$fixture/paneless.rb"
+grep -Fq 'Paneless-20260930.120001.zip' "$fixture/paneless.rb"
+grep -Fq 'target: "paneless"' "$fixture/paneless.rb"
 
 # The real orchestration is exercised with controlled external stage boundaries.
 paneless_release_preflight() { printf 'preflight\n' >> "$fixture/stages"; test "${FAIL_STAGE:-}" != preflight; }

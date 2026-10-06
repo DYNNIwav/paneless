@@ -27,7 +27,7 @@ paneless_release_validate_feed() {
 paneless_release_check_latest_build() {
     local build="$1" assets previous
     assets="$(gh api "repos/$PANELESS_RELEASE_REPO/releases/latest" --jq '.assets[].name')" || return 1
-    if printf '%s\n' "$assets" | rg -Fxq appcast.xml; then
+    if printf '%s\n' "$assets" | grep -Fxq appcast.xml; then
         previous="$(curl --fail --silent --show-error --location "https://github.com/$PANELESS_RELEASE_REPO/releases/latest/download/appcast.xml" \
             | /usr/bin/xmllint --xpath 'string(//*[local-name()="item"]/*[local-name()="version"])' -)" || return 1
         paneless_build_is_newer "$build" "$previous" || { echo "Build $build is not newer than $previous" >&2; return 1; }
@@ -40,7 +40,7 @@ paneless_release_preflight() {
     [ ! -e "$output" ] || { echo "Release directory already exists: $output" >&2; return 1; }
     [ -z "$(git -C "$PANELESS_RELEASE_ROOT" status --porcelain)" ] || { echo "Commit source changes before preparing a release" >&2; return 1; }
     tags="$(gh api "repos/$PANELESS_RELEASE_REPO/releases" --paginate --jq '.[].tag_name')" || return 1
-    if printf '%s\n' "$tags" | rg -Fxq "$version"; then echo "Release already exists: $version" >&2; return 1; fi
+    if printf '%s\n' "$tags" | grep -Fxq "$version"; then echo "Release already exists: $version" >&2; return 1; fi
     public="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PANELESS_RELEASE_ROOT/Resources/Info.plist")" || return 1
     key="$("$PANELESS_RELEASE_ROOT/.build/artifacts/sparkle/Sparkle/bin/generate_keys" --account "$PANELESS_SPARKLE_ACCOUNT" -p)" || return 1
     [ -n "$public" ] && [ "$public" = "$key" ] || { echo "Public key does not match Paneless's Keychain signing account" >&2; return 1; }
@@ -88,8 +88,8 @@ paneless_release_verify() {
     local app="$2/Paneless.app" identity
     codesign --verify --deep --strict "$app" || return 1
     identity="$(codesign -dv --verbose=4 "$app" 2>&1)" || return 1
-    printf '%s\n' "$identity" | rg -Fxq 'Identifier=com.paneless.app' || return 1
-    printf '%s\n' "$identity" | rg -Fxq 'TeamIdentifier=2WDPP87T4V' || return 1
+    printf '%s\n' "$identity" | grep -Fxq 'Identifier=com.paneless.app' || return 1
+    printf '%s\n' "$identity" | grep -Fxq 'TeamIdentifier=2WDPP87T4V' || return 1
     spctl --assess --type execute "$app" || return 1
     bash "$PANELESS_RELEASE_ROOT/Scripts/tests/update-artifact-test.sh" "$app"
 }
@@ -159,8 +159,8 @@ paneless_release_publish() {
     gh release create "$version" "$archive" "$output/appcast.xml" --repo "$PANELESS_RELEASE_REPO" \
         --draft --target "$commit" --title "Paneless $version" --generate-notes || return 1
     assets="$(gh release view "$version" --repo "$PANELESS_RELEASE_REPO" --json assets --jq '.assets[].name')" || return 1
-    printf '%s\n' "$assets" | rg -Fxq "Paneless-$build.zip" || return 1
-    printf '%s\n' "$assets" | rg -Fxq appcast.xml || return 1
+    printf '%s\n' "$assets" | grep -Fxq "Paneless-$build.zip" || return 1
+    printf '%s\n' "$assets" | grep -Fxq appcast.xml || return 1
     gh release edit "$version" --repo "$PANELESS_RELEASE_REPO" --draft=false --latest
 }
 
