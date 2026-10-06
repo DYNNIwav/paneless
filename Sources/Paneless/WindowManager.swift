@@ -126,6 +126,8 @@ class WindowManager: WindowObserverDelegate {
     // as their column. Filled in by the poll, read by the niri layout so the column
     // widens to fit rather than letting the window overlap the next one.
     private var niriMinWidth: [CGWindowID: CGFloat] = [:]
+    /// Each window's width at the previous poll, so a min width is only learned once it holds.
+    private var niriLastWidth: [CGWindowID: CGFloat] = [:]
 
     // The monitor whose active workspace is currently loaded into the live set
     // (trackedWindows / axElements / layoutEngine). Used to migrate state when a
@@ -1248,8 +1250,11 @@ class WindowManager: WindowObserverDelegate {
     /// which the window then accepts unchanged, so it settles after one retile. A clear
     /// or shrink path here would fight a terminal that rounds its width down to a
     /// character cell: give it back the space, it snaps narrow again, and the column
-    /// jitters on every poll. A window that no longer needs the width just keeps a
-    /// slightly wide column until it closes, which nobody notices.
+    /// jitters on every poll. A window that no longer needs the width keeps a slightly
+    /// wide column until it closes or the column width is cycled.
+    ///
+    /// A width counts only once it holds across two polls: a window still catching up
+    /// with a resize (Electron apps lag the animation) reads wide once, then settles.
     private func measureNiriMinWidths(frames: [CGWindowID: CGRect]) {
         guard config.niriMode, !Animator.shared.isAnimating, !isResizing,
               !layoutEngine.niriColumns.isEmpty else { return }
@@ -1264,14 +1269,15 @@ class WindowManager: WindowObserverDelegate {
             scrollOffset: layoutEngine.niriScrollOffset, fillScreen: config.niriFillScreen,
             minWidthByWindow: niriMinWidth, resultingScrollOffset: &offset)
 
-        let tolerance: CGFloat = 4
         var changed = false
         for colResult in allocated where colResult.isVisible {
             for (wid, allocFrame) in colResult.windowFrames {
                 guard let actual = frames[wid] else { continue }
-                if actual.width > allocFrame.width + tolerance,
-                   (niriMinWidth[wid] ?? 0) < actual.width - tolerance {
-                    niriMinWidth[wid] = actual.width
+                let previous = niriLastWidth[wid]
+                niriLastWidth[wid] = actual.width
+                if let learned = NiriMinWidth.learned(actual: actual.width, previous: previous,
+                                                      allocated: allocFrame.width, recorded: niriMinWidth[wid]) {
+                    niriMinWidth[wid] = learned
                     changed = true
                     let name = trackedWindows[wid]?.appName ?? "?"
                     panelessLog("Window \(wid) (\(name)) rendered \(Int(actual.width)) wide in a \(Int(allocFrame.width)) column, widening the column to fit")
@@ -1365,6 +1371,7 @@ class WindowManager: WindowObserverDelegate {
         fullscreenWindows.remove(windowID)
         stickyWindows.remove(windowID)
         niriMinWidth.removeValue(forKey: windowID)
+        niriLastWidth.removeValue(forKey: windowID)
         if dimmedWindows.remove(windowID) != nil {
             var wids: [CGWindowID] = [windowID]
             var values: [Float] = [0.0]
@@ -1448,6 +1455,7 @@ class WindowManager: WindowObserverDelegate {
             WorkspaceManager.shared.releaseSwallowed(terminalWID)
         }
         niriMinWidth.removeValue(forKey: windowID)
+        niriLastWidth.removeValue(forKey: windowID)
         WorkspaceManager.shared.forget(windowID)
         panelessLog("Window \(windowID) closed while parked, dropped from its workspace")
     }
@@ -1712,6 +1720,9 @@ class WindowManager: WindowObserverDelegate {
             for i in layoutEngine.niriColumns.indices {
                 layoutEngine.niriColumns[i].widthOverride = nil
             }
+            // An explicit width beats anything measured; stubborn windows get measured again.
+            niriMinWidth.removeAll()
+            niriLastWidth.removeAll()
             let names = ["full", "half", "third"]
             panelessLog("Niri column width: \(names[nextIdx])")
             retile()
