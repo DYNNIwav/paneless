@@ -284,6 +284,22 @@ enum AccessibilityBridge {
         return title as? String
     }
 
+    static func stringAttribute(_ name: String, of element: AXUIElement) -> String? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    /// The attributes FloatPlacement decides on, read once.
+    static func traits(of element: AXUIElement, bundleID: String?) -> WindowTraits {
+        WindowTraits(
+            role: stringAttribute(kAXRoleAttribute, of: element),
+            subrole: stringAttribute(kAXSubroleAttribute, of: element),
+            identifier: stringAttribute(kAXIdentifierAttribute, of: element),
+            bundleID: bundleID
+        )
+    }
+
     /// Check if a window is a dialog, sheet, or utility panel that should auto-float.
     static func isDialog(_ element: AXUIElement) -> Bool {
         var subrole: AnyObject?
