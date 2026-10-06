@@ -152,6 +152,7 @@ class WindowManager: WindowObserverDelegate {
     // request apart from that fallback.
     private let summonSettleDelay: TimeInterval = 0.3
     private var pendingSummon: DispatchWorkItem?
+    private var summonHold = SummonHold()
 
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
@@ -1536,6 +1537,10 @@ class WindowManager: WindowObserverDelegate {
 
     func applicationLaunched(pid: pid_t, name: String) {}
 
+    func holdSummon(bundleID: String, seconds: TimeInterval) {
+        summonHold.hold(bundleID, for: seconds, now: Date())
+    }
+
     func applicationActivated(pid: pid_t, name: String) {
         guard config.focusFollowsApp, !isAutoSwitching else { return }
 
@@ -1591,6 +1596,10 @@ class WindowManager: WindowObserverDelegate {
         // The world may have moved while we waited, so re-establish every precondition.
         guard config.focusFollowsApp, !isAutoSwitching else { return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+        if summonHold.isHeld(NSRunningApplication(processIdentifier: pid)?.bundleIdentifier, now: Date()) {
+            panelessLog("Focus-follows-app: \(name) is held where it is")
+            return
+        }
 
         let nowMonitor = WorkspaceManager.shared.screenID(for: NSScreen.safeMain)
         guard nowMonitor == monitorID,
