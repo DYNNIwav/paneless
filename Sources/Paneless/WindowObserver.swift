@@ -15,6 +15,8 @@ protocol WindowObserverDelegate: AnyObject {
     func applicationTerminated(pid: pid_t, name: String)
     /// Another app asked that `bundleID` not be summoned for `seconds` (`SummonHold`).
     func holdSummon(bundleID: String, seconds: TimeInterval)
+    /// Another app asked that the next window of `bundleID` float (`FloatRequest`).
+    func floatNext(bundleID: String, seconds: TimeInterval)
     func applicationActivated(pid: pid_t, name: String)
     func axElementDestroyed(element: AXUIElement)
 }
@@ -73,6 +75,8 @@ class WindowObserver {
                        name: NSWorkspace.didActivateApplicationNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(summonHeld(_:)), name: SummonHold.notification, object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(floatAsked(_:)), name: FloatRequest.notification, object: nil)
 
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             addAXObserver(for: app.processIdentifier)
@@ -279,6 +283,13 @@ class WindowObserver {
               let seconds = notification.userInfo?["seconds"] as? Double
         else { return }
         delegate?.holdSummon(bundleID: bundleID, seconds: seconds)
+    }
+
+    @objc private func floatAsked(_ notification: Notification) {
+        guard let bundleID = notification.userInfo?["bundleID"] as? String,
+              let seconds = notification.userInfo?["seconds"] as? Double
+        else { return }
+        delegate?.floatNext(bundleID: bundleID, seconds: seconds)
     }
 
     @objc private func appActivated(_ notification: Notification) {
