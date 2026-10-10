@@ -153,6 +153,7 @@ class WindowManager: WindowObserverDelegate {
     private let summonSettleDelay: TimeInterval = 0.3
     private var pendingSummon: DispatchWorkItem?
     private var summonHold = SummonHold()
+    private var floatRequest = FloatRequest()
 
     // Settings UI: skip next config reload (the UI just wrote the file)
     var suppressNextReload = false
@@ -1023,6 +1024,13 @@ class WindowManager: WindowObserverDelegate {
         // the screen list and brings it back as new, and one returning from a half or
         // third tile always looks like a small secondary window.
         let tiledBefore = onceTiled.contains(windowID)
+        let traits = AccessibilityBridge.traits(of: element, bundleID: bundleID)
+
+        // Another app asked for this one to float (`FloatRequest`).
+        if !shouldFloat, !tiledBefore, floatRequest.take(bundleID, subrole: traits.subrole, now: Date()) {
+            shouldFloat = true
+            panelessLog("Floating \(appName) (\(windowID)) on request")
+        }
 
         // Auto-float dialogs and small windows
         if !shouldFloat, !tiledBefore, config.autoFloatDialogs, let element = axElements[windowID] {
@@ -1054,7 +1062,7 @@ class WindowManager: WindowObserverDelegate {
         // being worked on, or left exactly where the app put it (sheets, the Quick
         // Terminal, menus and popups). Mail's compose windows float too.
         let placement = FloatPlacement.placement(
-            for: AccessibilityBridge.traits(of: element, bundleID: bundleID),
+            for: traits,
             floatsByRule: shouldFloat,
             tiledBefore: tiledBefore
         )
@@ -1539,6 +1547,10 @@ class WindowManager: WindowObserverDelegate {
 
     func holdSummon(bundleID: String, seconds: TimeInterval) {
         summonHold.hold(bundleID, for: seconds, now: Date())
+    }
+
+    func floatNext(bundleID: String, seconds: TimeInterval) {
+        floatRequest.ask(bundleID, for: seconds, now: Date())
     }
 
     func applicationActivated(pid: pid_t, name: String) {
