@@ -362,6 +362,7 @@ For use in the `[bindings]` section:
 | `position_left` / `position_right` / `position_up` / `position_down` | Move window in tiled list |
 | `position_fill` | Fill tiling region |
 | `position_center` | Center window at 60% width |
+| `toggle_app <App>` | Open an app, or hide it if it is in front. Add it to `float` to have it float in the middle, e.g. `ctrl+alt, t = toggle_app Terminal` |
 | `increase_gap` / `decrease_gap` | Adjust gaps by 4px |
 | `grow_focused` / `shrink_focused` | Adjust split ratio by 5% |
 | `focus_monitor left` / `focus_monitor right` | Focus neighbor monitor |
