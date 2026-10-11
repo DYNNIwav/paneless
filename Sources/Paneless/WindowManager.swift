@@ -76,7 +76,12 @@ class WindowManager: WindowObserverDelegate {
     var floatingWindows: Set<CGWindowID> = []
     var fullscreenWindows: Set<CGWindowID> = []
     var stickyWindows: Set<CGWindowID> = []
-    var focusedWindowID: CGWindowID?
+    var focusedWindowID: CGWindowID? {
+        didSet {
+            if let focusedWindowID { focusReturn.focused(focusedWindowID, tiled: layoutEngine.contains(focusedWindowID)) }
+        }
+    }
+    private var focusReturn = FocusReturn()
 
     private var mouseMonitor: Any?
     private var lastMouseFocusTime: Date = .distantPast
@@ -1331,6 +1336,7 @@ class WindowManager: WindowObserverDelegate {
         windowMarks = windowMarks.filter { $0.value != windowID }
 
         let destroyedPid = trackedWindows[windowID]?.pid
+        let wasFloating = floatingWindows.contains(windowID)
 
         // Window swallowing: if this window swallowed a terminal, restore it
         if let terminalWID = swallowedWindows.removeValue(forKey: windowID) {
@@ -1455,6 +1461,16 @@ class WindowManager: WindowObserverDelegate {
             let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
             updateBorders(layouts: layouts)
             updateDimming(layouts: layouts)
+        } else if wasFloating {
+            // A floating window closed while it, or its app, had focus: the keyboard goes
+            // back to the tiled window last used here, not to whatever macOS picks.
+            let focusStayed = focusedWindowID == windowID || focusedWindowID == nil
+                || focusedWindowID.flatMap { trackedWindows[$0]?.pid } == destroyedPid
+            if focusStayed, let heirID = focusReturn.heir(tiledHere: layoutEngine.tiledWindows),
+               let element = axElements[heirID], let tracked = trackedWindows[heirID] {
+                AccessibilityBridge.focus(window: element, pid: tracked.pid)
+                focusedWindowID = heirID
+            }
         }
     }
 
