@@ -472,6 +472,9 @@ struct PanelessConfig {
         case "niri_move_right": return .niriMoveRight
         case "niri_move_column_left": return .niriMoveColumnLeft
         case "niri_move_column_right": return .niriMoveColumnRight
+        case "toggle_app":
+            if let app = arg?.trimmingCharacters(in: .whitespaces), !app.isEmpty { return .toggleApp(app) }
+            return nil
         default: return nil
         }
     }
@@ -520,6 +523,7 @@ struct PanelessConfig {
         case .niriMoveRight: return "niri_move_right"
         case .niriConsume: return "niri_consume"
         case .niriExpel: return "niri_expel"
+        case .toggleApp(let app): return "toggle_app \(app)"
         }
     }
 

@@ -310,6 +310,26 @@ class WindowManager: WindowObserverDelegate {
         case .niriMoveDown:                 niriMoveVertical(1)
         case .niriMoveRight:                niriMoveFocused(right: true)
         case .niriExpel:                    niriExpel()
+        case .toggleApp(let app):           toggleApp(app)
+        }
+    }
+
+    // MARK: - App Toggle
+
+    private func toggleApp(_ app: String) {
+        let front = NSWorkspace.shared.frontmostApplication
+        let isFrontmost = front.map {
+            appMatchesRule($0.localizedName ?? "", bundleID: $0.bundleIdentifier, rules: [app])
+        } ?? false
+        switch AppToggle.step(isFrontmost: isFrontmost) {
+        case .hide:
+            front?.hide()
+        case .open:
+            guard let url = AppToggle.applicationURL(for: app) else {
+                panelessLog("toggle_app: no app named '\(app)'")
+                return
+            }
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
     }
 
