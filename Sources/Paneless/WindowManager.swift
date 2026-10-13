@@ -1589,6 +1589,29 @@ class WindowManager: WindowObserverDelegate {
         floatRequest.ask(bundleID, for: seconds, now: Date())
     }
 
+    func listWorkspaces(token: String) {
+        guard let reply = WorkspaceListing.replyURL(token: token) else { return }
+        let wsMgr = WorkspaceManager.shared
+        let monitorID = currentMonitorID
+        let current = wsMgr.activeWorkspace[monitorID] ?? 1
+        // The workspace being worked on lives in this manager; the others are stored.
+        var stored = (wsMgr.workspaces[monitorID] ?? [:]).mapValues { ($0.trackedWindows, $0.axElements) }
+        if monitorID == liveMonitorID { stored[current] = (trackedWindows, axElements) }
+        let windows = stored.mapValues { tracked, elements in
+            tracked.map { wid, window in
+                WorkspaceListing.Window(
+                    app: window.appName,
+                    title: elements[wid].flatMap { AccessibilityBridge.getTitle(of: $0) } ?? "")
+            }
+        }
+        let listing = WorkspaceListing(windows: windows, current: current)
+        do {
+            try JSONEncoder().encode(listing).write(to: reply, options: .atomic)
+        } catch {
+            panelessLog("Could not answer --list-workspaces: \(error)")
+        }
+    }
+
     func applicationActivated(pid: pid_t, name: String) {
         guard config.focusFollowsApp, !isAutoSwitching else { return }
 
