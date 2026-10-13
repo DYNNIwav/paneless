@@ -66,6 +66,12 @@ class WindowManager: WindowObserverDelegate {
         }
     }
     let observer: WindowObserver
+    /// Answers `paneless --list-workspaces`, and only the paneless binary itself.
+    private lazy var listingServer = ListingSocket.Server(
+        path: ListingSocket.defaultPath, allowed: Bundle.main.executablePath
+    ) { [unowned self] in
+        DispatchQueue.main.sync { (try? JSONEncoder().encode(self.workspaceListing())) ?? Data() }
+    }
     let eventTap: EventTap
 
     var onSpaceChange: (() -> Void)?
@@ -180,6 +186,12 @@ class WindowManager: WindowObserverDelegate {
         observer.delegate = self
         observer.start()
 
+        do {
+            try listingServer.start()
+        } catch {
+            panelessLog("Could not listen for --list-workspaces: \(error)")
+        }
+
         eventTap.actionHandler = { [weak self] action in
             self?.handleAction(action)
         }
@@ -262,6 +274,7 @@ class WindowManager: WindowObserverDelegate {
         stopDisplayLink()
         NotificationCenter.default.removeObserver(self)
         observer.stop()
+        listingServer.stop()
         eventTap.stop()
         panelessLog("Paneless stopped")
     }
@@ -1589,8 +1602,8 @@ class WindowManager: WindowObserverDelegate {
         floatRequest.ask(bundleID, for: seconds, now: Date())
     }
 
-    func listWorkspaces(token: String) {
-        guard let reply = WorkspaceListing.replyURL(token: token) else { return }
+    /// What `paneless --list-workspaces` prints, for the current monitor.
+    func workspaceListing() -> WorkspaceListing {
         let wsMgr = WorkspaceManager.shared
         let monitorID = currentMonitorID
         let current = wsMgr.activeWorkspace[monitorID] ?? 1
@@ -1604,12 +1617,7 @@ class WindowManager: WindowObserverDelegate {
                     title: elements[wid].flatMap { AccessibilityBridge.getTitle(of: $0) } ?? "")
             }
         }
-        let listing = WorkspaceListing(windows: windows, current: current)
-        do {
-            try JSONEncoder().encode(listing).write(to: reply, options: .atomic)
-        } catch {
-            panelessLog("Could not answer --list-workspaces: \(error)")
-        }
+        return WorkspaceListing(windows: windows, current: current)
     }
 
     func applicationActivated(pid: pid_t, name: String) {
