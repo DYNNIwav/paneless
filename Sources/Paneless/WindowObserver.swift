@@ -17,8 +17,6 @@ protocol WindowObserverDelegate: AnyObject {
     func holdSummon(bundleID: String, seconds: TimeInterval)
     /// Another app asked that the next window of `bundleID` float (`FloatRequest`).
     func floatNext(bundleID: String, seconds: TimeInterval)
-    /// `paneless --list-workspaces` asked for the listing, to be written for `token` (`WorkspaceListing`).
-    func listWorkspaces(token: String)
     func applicationActivated(pid: pid_t, name: String)
     func axElementDestroyed(element: AXUIElement)
 }
@@ -79,8 +77,6 @@ class WindowObserver {
             self, selector: #selector(summonHeld(_:)), name: SummonHold.notification, object: nil)
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(floatAsked(_:)), name: FloatRequest.notification, object: nil)
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(listingAsked(_:)), name: WorkspaceListing.request, object: nil)
 
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             addAXObserver(for: app.processIdentifier)
@@ -294,11 +290,6 @@ class WindowObserver {
               let seconds = notification.userInfo?["seconds"] as? Double
         else { return }
         delegate?.floatNext(bundleID: bundleID, seconds: seconds)
-    }
-
-    @objc private func listingAsked(_ notification: Notification) {
-        guard let token = notification.userInfo?["token"] as? String else { return }
-        delegate?.listWorkspaces(token: token)
     }
 
     @objc private func appActivated(_ notification: Notification) {

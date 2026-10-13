@@ -1,8 +1,7 @@
 import Foundation
 
 /// What `paneless --list-workspaces` prints. Only the running Paneless knows where windows are,
-/// so the command line asks it: it posts `request` with a `token`, and Paneless writes the
-/// listing as JSON to `replyURL(token:)`, which the command line reads and deletes.
+/// so the command line asks it over `ListingSocket` and gets the listing back as JSON.
 struct WorkspaceListing: Codable, Equatable {
     struct Window: Codable, Equatable {
         let app: String
@@ -14,8 +13,6 @@ struct WorkspaceListing: Codable, Equatable {
         let current: Bool
         let windows: [Window]
     }
-
-    static let request = Notification.Name("com.paneless.listWorkspaces")
 
     let workspaces: [Workspace]
 
@@ -36,28 +33,29 @@ struct WorkspaceListing: Codable, Equatable {
         }.joined(separator: "\n")
     }
 
-    /// Where Paneless answers a request. The token must be a UUID, so a request can never
-    /// make Paneless write anywhere but its own temporary directory.
-    static func replyURL(token: String) -> URL? {
-        guard let uuid = UUID(uuidString: token) else { return nil }
-        return URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("paneless-workspaces-\(uuid.uuidString).json")
-    }
-
     /// Asks the running Paneless for its listing. Nil when nothing answers within `timeout`.
-    static func ask(timeout: TimeInterval = 1.5) -> WorkspaceListing? {
-        let token = UUID().uuidString
-        guard let reply = replyURL(token: token) else { return nil }
-        DistributedNotificationCenter.default().postNotificationName(
-            request, object: nil, userInfo: ["token": token], deliverImmediately: true)
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while Date() < deadline {
-            if let data = try? Data(contentsOf: reply) {
-                try? FileManager.default.removeItem(at: reply)
-                return try? JSONDecoder().decode(WorkspaceListing.self, from: data)
+    static func ask(socket path: String = ListingSocket.defaultPath, timeout: TimeInterval = 1.5) -> WorkspaceListing? {
+        guard var address = ListingSocket.address(path) else { return nil }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var limit = timeval(tv_sec: Int(timeout), tv_usec: Int32((timeout - timeout.rounded(.down)) * 1_000_000))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
-            usleep(20_000)
         }
-        return nil
+        guard connected == 0 else { return nil }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while Date() < deadline {
+            let n = read(fd, &buffer, buffer.count)
+            if n < 0 { return nil }
+            if n == 0 { break }
+            data.append(buffer, count: n)
+        }
+        return try? JSONDecoder().decode(WorkspaceListing.self, from: data)
     }
 }
