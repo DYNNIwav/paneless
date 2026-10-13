@@ -41,17 +41,11 @@ if CommandLine.arguments.count >= 2 {
         if arg == "--list-spaces" {
             fputs("WARNING: --list-spaces is deprecated, use --list-workspaces instead\n", stderr)
         }
-        let wsMgr = WorkspaceManager.shared
-        let screen = NSScreen.safeMain
-        let monitorID = wsMgr.screenID(for: screen)
-        let activeWS = wsMgr.activeWorkspace[monitorID] ?? 1
-        for n in 1...9 {
-            let count = wsMgr.windowCount(workspace: n, on: monitorID)
-            if count > 0 || n == activeWS {
-                let marker = n == activeWS ? " <- current" : ""
-                print("Workspace \(n) (\(count) windows)\(marker)")
-            }
+        guard let listing = WorkspaceListing.ask() else {
+            fputs("Paneless is not running\n", stderr)
+            exit(1)
         }
+        print(listing.text())
         exit(0)
 
     case "--help", "-h":
@@ -61,7 +55,7 @@ if CommandLine.arguments.count >= 2 {
         Usage:
           paneless                             Start as daemon (menu bar app)
           paneless --focus-workspace N         Switch to workspace N (1-9)
-          paneless --list-workspaces           List workspaces with windows
+          paneless --list-workspaces           List workspaces and their windows
           paneless --help                      Show this help
 
         Default Hotkeys:

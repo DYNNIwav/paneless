@@ -386,7 +386,7 @@ The `paneless` binary doubles as a CLI for scripting and integration:
 
 ```bash
 paneless --focus-workspace 3       # Switch to workspace 3
-paneless --list-workspaces         # List workspaces with windows
+paneless --list-workspaces         # List workspaces and their windows
 paneless --help                    # Show help
 ```
 
