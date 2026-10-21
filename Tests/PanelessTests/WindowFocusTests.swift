@@ -45,4 +45,22 @@ import Testing
                 trackedProcess: 100, sameElement: true, location: location) == nil)
         }
     }
+
+    @Test func closingACheckerDoesNotBuryTheSameProcessUpdateWindow() {
+        #expect(!WindowFocus.afterClosingFloating(destroyed: 10, focused: 11,
+            focusedProcess: 100, destroyedProcess: 100, survivingFocus: 11))
+    }
+
+    @Test func aLateCloseCannotUndoAnObservedBrowserSwitch() {
+        // The cached focus still names the closing window, but AX already sees the browser.
+        #expect(!WindowFocus.afterClosingFloating(destroyed: 10, focused: 10,
+            focusedProcess: 100, destroyedProcess: 100, survivingFocus: 20))
+    }
+
+    @Test func aClosedOrUnknownFloatingFocusStillReturnsToTheTile() {
+        #expect(WindowFocus.afterClosingFloating(destroyed: 10, focused: 10,
+            focusedProcess: 100, destroyedProcess: 100, survivingFocus: nil))
+        #expect(WindowFocus.afterClosingFloating(destroyed: 10, focused: nil,
+            focusedProcess: nil, destroyedProcess: 100, survivingFocus: nil))
+    }
 }

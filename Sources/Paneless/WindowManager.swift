@@ -1342,6 +1342,22 @@ class WindowManager: WindowObserverDelegate {
         windowDestroyed(windowID: windowID)
     }
 
+    private func survivingFocus(excluding destroyed: CGWindowID) -> CGWindowID? {
+        AccessibilityBridge.getFocusedWindow().flatMap { element, id, pid -> CGWindowID? in
+            guard id != destroyed else { return nil }
+            let location: WindowFocus.Location
+            if minimizedWindows.contains(id) { location = .minimized }
+            else if niriHiddenWindows.contains(id) { location = .hidden }
+            else if floatingWindows.contains(id) { location = .floating }
+            else if engineHolding(id) != nil { location = .tiled }
+            else { location = .unmanaged }
+            return WindowFocus.liveFocus(window: id, process: pid,
+                trackedProcess: trackedWindows[id]?.pid,
+                sameElement: axElements[id].map { CFEqual($0, element) } ?? false,
+                location: location)
+        }
+    }
+
     func windowDestroyed(windowID: CGWindowID) {
         guard trackedWindows[windowID] != nil else {
             // Not on the live workspace. Hidden with Cmd+H, minimised or away on another
@@ -1467,19 +1483,7 @@ class WindowManager: WindowObserverDelegate {
 
             // A reply can already own focus when Mail closes its original viewer.
             // Observe the exact live AX identity; a cached or parked window is not proof.
-            let liveFocus = AccessibilityBridge.getFocusedWindow().flatMap { element, id, pid -> CGWindowID? in
-                guard id != windowID else { return nil }
-                let location: WindowFocus.Location
-                if minimizedWindows.contains(id) { location = .minimized }
-                else if niriHiddenWindows.contains(id) { location = .hidden }
-                else if floatingWindows.contains(id) { location = .floating }
-                else if engineHolding(id) != nil { location = .tiled }
-                else { location = .unmanaged }
-                return WindowFocus.liveFocus(window: id, process: pid,
-                    trackedProcess: trackedWindows[id]?.pid,
-                    sameElement: axElements[id].map { CFEqual($0, element) } ?? false,
-                    location: location)
-            }
+            let liveFocus = survivingFocus(excluding: windowID)
             let shouldRefocus = WindowFocus.afterClosingTiled(
                 destroyed: windowID, focused: liveFocus ?? focusedWindowID,
                 appStillTiled: appStillTiled, focusedSurvives: liveFocus != nil)
@@ -1512,8 +1516,10 @@ class WindowManager: WindowObserverDelegate {
         } else if wasFloating {
             // A floating window closed while it, or its app, had focus: the keyboard goes
             // back to the tiled window last used here, not to whatever macOS picks.
-            let focusStayed = focusedWindowID == windowID || focusedWindowID == nil
-                || focusedWindowID.flatMap { trackedWindows[$0]?.pid } == destroyedPid
+            let focusStayed = WindowFocus.afterClosingFloating(
+                destroyed: windowID, focused: focusedWindowID,
+                focusedProcess: focusedWindowID.flatMap { trackedWindows[$0]?.pid },
+                destroyedProcess: destroyedPid, survivingFocus: survivingFocus(excluding: windowID))
             if focusStayed, let heirID = focusReturn.heir(tiledHere: layoutEngine.tiledWindows),
                let element = axElements[heirID], let tracked = trackedWindows[heirID] {
                 AccessibilityBridge.focus(window: element, pid: tracked.pid)

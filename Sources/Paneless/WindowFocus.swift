@@ -19,4 +19,11 @@ enum WindowFocus {
         if focusedSurvives, let focused, focused != destroyed { return false }
         return focused == destroyed || focused == nil || !appStillTiled
     }
+
+    static func afterClosingFloating(destroyed: CGWindowID, focused: CGWindowID?,
+                                     focusedProcess: Int32?, destroyedProcess: Int32?,
+                                     survivingFocus: CGWindowID?) -> Bool {
+        if let survivingFocus, survivingFocus != destroyed { return false }
+        return focused == destroyed || focused == nil || focusedProcess == destroyedProcess
+    }
 }
