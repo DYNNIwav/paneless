@@ -6,7 +6,7 @@ Built with Swift. Works on macOS Sonoma, Sequoia, and Tahoe without disabling SI
 
 ## Features
 
-- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. Named workspaces (e.g., `1:Code`, `2:Browser`) shown in the menu bar. No native Spaces animation delays.
+- **Virtual Workspaces** — 9 workspaces per monitor, instant switching with Alt+1-9. Workspaces can be named (e.g., `1:Code`, `2:Browser`); the names show in the menu bar's menu. No native Spaces animation delays.
 - **Two Tiling Modes** — **Hyprland mode** (default): master-stack layouts with 3 variants (side-by-side, stacked, monocle). **Niri mode**: infinite scrolling columns like [Niri](https://github.com/YaLTeR/niri), with per-column width control and multi-window column stacking.
 - **Smooth Animations** — GPU-composited popin/popout animations with Hyprland-style bezier curves. New windows scale in (80% → 100%), closing windows shrink + fade out. Configurable: `animations = false` to disable.
 - **Window Dimming** — Compositor-level dimming that follows window shape, rounded corners, and shadows perfectly. Configurable intensity.
@@ -18,7 +18,7 @@ Built with Swift. Works on macOS Sonoma, Sequoia, and Tahoe without disabling SI
 - **Minimize to Workspace** — Alt+Shift+M hides window, Alt+Shift+number to restore.
 - **Window Borders** — Hyprland-style colored borders around the focused window.
 - **Window Swallowing** — When a terminal (Ghostty, iTerm2, etc.) launches a GUI app, the GUI app replaces the terminal in the tiling layout. When the GUI app closes, the terminal reappears at its original position. Configurable per-app or global with `swallow_all`.
-- **Focus Follows App** — When an app on a different workspace is activated (Cmd+Tab, clicking a link, Spotlight), Paneless auto-switches to that app's workspace. Enabled by default.
+- **Focus Follows App** — When an app on a different workspace is activated (Cmd+Tab, clicking a link, Spotlight), Paneless brings that app's windows to the workspace you are on, so you stay where you are. Enabled by default.
 - **Focus Follows Mouse** — Optional: auto-focus the tiled window under the cursor.
 - **Mouse Drag Resize** — Ctrl+drag on the split divider to resize tiled windows.
 - **Crash Recovery** — Orphaned windows from a previous crash are restored on startup. Workspace assignments persist across sessions.
@@ -209,7 +209,7 @@ dim_unfocused = 0.03
 # niri_column_stack = auto
 # niri_fill_screen = true
 
-# Auto-switch workspace when an app on another workspace gets activated
+# Bring an app's windows here when it is activated from another workspace
 # focus_follows_app = true
 
 # Hyperkey: a single key that acts as Ctrl+Opt+Cmd+Shift when held.
@@ -247,7 +247,7 @@ float = Finder, System Settings, Calculator, Archive Utility, System Preferences
 # inactive_color = #7f849c
 
 [workspaces]
-# Named workspaces (shown in menu bar)
+# Named workspaces (shown in the menu bar's menu)
 # 1 = Code
 # 2 = Browser
 # 3 = Chat
@@ -312,7 +312,7 @@ cmd+shift, f = position_fill
 |---------|-----|---------|-------------|
 | layout | `inner_gap` | 8 | Gap between windows (px) |
 | layout | `outer_gap` | 8 | Gap between windows and screen edges (px) |
-| layout | `dim_unfocused` | 0 | Dim amount for unfocused windows (0.0 - 1.0) |
+| layout | `dim_unfocused` | 0 | Dim amount for unfocused windows (0.0 - 1.0). A new config file starts at 0.03 |
 | layout | `single_window_padding` | 0 | Extra padding when only 1 window is tiled |
 | layout | `focus_follows_mouse` | false | Focus window under cursor |
 | layout | `animations` | true | GPU-composited Hyprland-style animations (set false for instant) |
@@ -324,8 +324,8 @@ cmd+shift, f = position_fill
 | layout | `niri_column_stack` | auto | How windows sharing a column are arranged: `vertical`, `horizontal`, or `auto`, which stacks them until a pane would fall below 400 points |
 | layout | `niri_fill_screen` | true | Widen columns while they still fit, so one window fills the screen and two take half each before the strip starts scrolling |
 | layout | `size_once` | false | Set a window's size in a single write instead of on every animation frame. Cheaper, but the size snaps while the position glides |
-| layout | `app_driven_animation` | false | Leave `AXEnhancedUserInterface` on so applications animate their own movement. Smooth in the apps that support it, ignored by the ones that do not |
-| layout | `focus_follows_app` | true | Auto-switch workspace when an app on another workspace is activated |
+| layout | `app_driven_animation` | moves | Who animates a move: `off` (Paneless writes every frame), `moves` (the app animates a move, Paneless anything that resizes) or `always` (the app animates everything, sizes snap) |
+| layout | `focus_follows_app` | true | Bring an app's windows to the current workspace when it is activated from another one |
 | layout | `hyperkey` | *(disabled)* | Key that acts as Ctrl+Opt+Cmd+Shift when held, globally (`f18`, `caps_lock`, `grave`, etc.) |
 | layout | `force_promotion` | false | Force ProMotion to stay at 120Hz |
 | border | `enabled` | false | Show window borders |

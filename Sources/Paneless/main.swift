@@ -61,8 +61,10 @@ if CommandLine.arguments.count >= 2 {
         Default Hotkeys:
           Alt+1-9              Switch to workspace N
           Alt+Shift+1-9        Move window to workspace N
-          Alt+Shift+H/L        Focus prev/next window
-          Alt+Shift+J/K        Rotate window positions
+          Alt+H/L              Focus left/right
+          Alt+J/K              Focus down/up
+          Alt+Shift+H/L        Move the column left/right
+          Alt+Shift+J/K        Move the window down/up in its column
           Alt+Shift+Enter      Swap with master
           Alt+Shift+Space      Cycle layout
           Alt+Shift+T          Toggle float
