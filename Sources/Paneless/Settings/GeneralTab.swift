@@ -25,14 +25,18 @@ struct GeneralTab: View {
                     : "Horizontally scrolling columns, similar to Niri/PaperWM.")
 
                 if viewModel.tilingMode == "niri" {
-                    HStack {
-                        Text("Column width")
-                        Slider(value: $viewModel.niriColumnWidth, in: 0.1...3.0, step: 0.1)
-                        Text("\(Int(viewModel.niriColumnWidth * 100))%")
-                            .monospacedDigit()
-                            .frame(width: 44, alignment: .trailing)
+                    Picker("Column width", selection: Binding(
+                        get: { ColumnWidth.choice(for: viewModel.niriColumnWidth) },
+                        set: { if let fraction = $0.fraction { viewModel.niriColumnWidth = fraction } }
+                    )) {
+                        ForEach(ColumnWidth.choices(for: viewModel.niriColumnWidth)) { width in
+                            Text(width == .custom
+                                ? "Custom (\(Int((viewModel.niriColumnWidth * 100).rounded()))%)"
+                                : width.label).tag(width)
+                        }
                     }
-                    SettingDescription(text: "Width of each column as a percentage of the screen. 100% = one column fills the screen.")
+                    .pickerStyle(.segmented)
+                    SettingDescription(text: "How much of the screen one column takes.")
 
                     HStack {
                         Stepper("Narrowest column", value: $viewModel.niriMinColumnWidth, in: 0...2000, step: 40)
@@ -40,7 +44,7 @@ struct GeneralTab: View {
                             .monospacedDigit()
                             .frame(width: 60, alignment: .trailing)
                     }
-                    SettingDescription(text: "The width above is a percentage, so it means a roomy column on a large display and a cramped one on a laptop. A column narrower than this steps up to the next whole fraction instead: a screen too narrow for thirds uses halves. Set to 0 to let the percentage stand whatever the screen.")
+                    SettingDescription(text: "The width above is a share of the screen, so it means a roomy column on a large display and a cramped one on a laptop. A column narrower than this steps up to the next whole fraction instead: a screen too narrow for thirds uses halves. Set to 0 to let the width stand whatever the screen.")
 
                     Picker("Windows sharing a column", selection: $viewModel.niriColumnStack) {
                         Text("Automatic").tag("auto")
