@@ -77,22 +77,16 @@ struct PanelessConfig {
     var border: BorderConfig = BorderConfig()
 
     // Window swallowing (terminal launches GUI app → GUI replaces terminal in tiling)
+    // Rule sets hold the names as written. `withBundleIDs` adds the bundle IDs they stand for.
     var swallowApps: Set<String> = [
-        "Ghostty", "Terminal", "iTerm2", "Alacritty", "WezTerm", "kitty",
-        "com.mitchellh.ghostty", "com.apple.Terminal",
-        "com.googlecode.iterm2", "io.alacritty",
-        "com.github.wez.wezterm", "net.kovidgoyal.kitty"
+        "Ghostty", "Terminal", "iTerm2", "Alacritty", "WezTerm", "kitty"
     ]
     var swallowAll: Bool = false
 
     // App rules
     var floatApps: Set<String> = [
         "Finder", "System Settings", "Calculator",
-        "Archive Utility", "System Preferences",
-        "com.apple.finder",
-        "com.apple.systempreferences",
-        "com.apple.calculator",
-        "com.apple.archiveutility"
+        "Archive Utility", "System Preferences"
     ]
     var excludeApps: Set<String> = []
 
@@ -203,6 +197,7 @@ struct PanelessConfig {
         guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             panelessLog("No config file at \(configPath), using defaults")
             config.keyBindings = defaultKeyBindings()
+            config.addBundleIDs()
             return config
         }
 
@@ -344,18 +339,37 @@ struct PanelessConfig {
         }
 
         // Always add bundle IDs for reliable matching on localized systems.
-        config.floatApps.formUnion(resolveBundleIDs(config.floatApps))
-        config.excludeApps.formUnion(resolveBundleIDs(config.excludeApps))
-        config.stickyApps.formUnion(resolveBundleIDs(config.stickyApps))
-        config.swallowApps.formUnion(resolveBundleIDs(config.swallowApps))
+        config.addBundleIDs()
 
         panelessLog("Config loaded from \(configPath)")
         return config
     }
 
+    /// Adds to every rule set the bundle IDs its names stand for. Run after anything that
+    /// sets the rules from names alone: a load, and a save from Settings.
+    mutating func addBundleIDs() {
+        floatApps.formUnion(Self.resolveBundleIDs(floatApps))
+        excludeApps.formUnion(Self.resolveBundleIDs(excludeApps))
+        stickyApps.formUnion(Self.resolveBundleIDs(stickyApps))
+        swallowApps.formUnion(Self.resolveBundleIDs(swallowApps))
+    }
+
+    /// A rule set as it was written, for the config file and for Settings: without the bundle
+    /// IDs `addBundleIDs` put there. An entry is left out only when one of the set's own names
+    /// stands for it, so a bundle ID written by hand, or an app with a dot in its name, stays.
+    static func written(_ apps: Set<String>) -> [String] {
+        apps.subtracting(resolveBundleIDs(apps)).sorted()
+    }
+
     /// Map known app names to their bundle IDs for locale-independent matching.
-    private static func resolveBundleIDs(_ apps: Set<String>) -> Set<String> {
+    static func resolveBundleIDs(_ apps: Set<String>) -> Set<String> {
         let knownApps: [String: String] = [
+            "ghostty": "com.mitchellh.ghostty",
+            "terminal": "com.apple.Terminal",
+            "iterm2": "com.googlecode.iterm2",
+            "alacritty": "io.alacritty",
+            "wezterm": "com.github.wez.wezterm",
+            "kitty": "net.kovidgoyal.kitty",
             "finder": "com.apple.finder",
             "system settings": "com.apple.systempreferences",
             "system preferences": "com.apple.systempreferences",
@@ -530,6 +544,19 @@ struct PanelessConfig {
     // MARK: - Save
 
     func save() {
+        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
+        let dir = (configPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        // Into the file as it stands, so its comments and the lines Paneless does not
+        // write survive a change made in Settings (`ConfigText`).
+        let existing = try? String(contentsOfFile: configPath, encoding: .utf8)
+        let content = ConfigText.merge(existing: existing, rendered: rendered())
+        try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
+        panelessLog("Config saved to \(configPath)")
+    }
+
+    /// The whole config as text, as Paneless writes it when there is no file yet.
+    func rendered() -> String {
         var lines: [String] = []
         lines.append("# Paneless Configuration")
         lines.append("")
@@ -549,12 +576,11 @@ struct PanelessConfig {
         lines.append("focus_follows_app = \(focusFollowsApp)")
         lines.append("dim_unfocused = \(dimUnfocused)")
         lines.append("tiling_mode = \(tilingMode)")
-        if tilingMode == "niri" {
-            lines.append("niri_column_width = \(niriColumnWidth)")
-            lines.append("niri_min_column_width = \(Int(niriMinColumnWidth))")
-            lines.append("niri_column_stack = \(niriColumnStack)")
-            lines.append("niri_fill_screen = \(niriFillScreen)")
-        }
+        // Written in either mode, so switching away and back keeps the column settings.
+        lines.append("niri_column_width = \(niriColumnWidth)")
+        lines.append("niri_min_column_width = \(Int(niriMinColumnWidth))")
+        lines.append("niri_column_stack = \(niriColumnStack)")
+        lines.append("niri_fill_screen = \(niriFillScreen)")
         if let code = hyperkeyCode, let name = KeyNames.keyName(for: code) {
             lines.append("hyperkey = \(name)")
         }
@@ -571,14 +597,14 @@ struct PanelessConfig {
 
         // [rules]
         lines.append("[rules]")
-        // Filter out bundle IDs, keep only human-readable names
-        let floatNames = floatApps.filter { !$0.contains(".") }.sorted()
+        // As written: without the bundle IDs the names stand for.
+        let floatNames = Self.written(floatApps)
         if !floatNames.isEmpty { lines.append("float = \(floatNames.joined(separator: ", "))") }
-        let excludeNames = excludeApps.filter { !$0.contains(".") }.sorted()
+        let excludeNames = Self.written(excludeApps)
         if !excludeNames.isEmpty { lines.append("exclude = \(excludeNames.joined(separator: ", "))") }
-        let stickyNames = stickyApps.filter { !$0.contains(".") }.sorted()
+        let stickyNames = Self.written(stickyApps)
         if !stickyNames.isEmpty { lines.append("sticky = \(stickyNames.joined(separator: ", "))") }
-        let swallowNames = swallowApps.filter { !$0.contains(".") }.sorted()
+        let swallowNames = Self.written(swallowApps)
         if !swallowNames.isEmpty { lines.append("swallow = \(swallowNames.joined(separator: ", "))") }
         if swallowAll { lines.append("swallow_all = true") }
         lines.append("")
@@ -630,11 +656,6 @@ struct PanelessConfig {
             lines.append("")
         }
 
-        let content = lines.joined(separator: "\n")
-        let configPath = NSString("~/.config/paneless/config").expandingTildeInPath
-        let dir = (configPath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
-        panelessLog("Config saved to \(configPath)")
+        return lines.joined(separator: "\n")
     }
 }

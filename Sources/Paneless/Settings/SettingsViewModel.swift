@@ -110,11 +110,11 @@ class SettingsViewModel: ObservableObject {
             hyperkeyOption = "disabled"
         }
 
-        // Filter out bundle IDs for display, keep only human-readable names
-        floatApps = config.floatApps.filter { !$0.contains(".") }.sorted()
-        excludeApps = config.excludeApps.filter { !$0.contains(".") }.sorted()
-        stickyApps = config.stickyApps.filter { !$0.contains(".") }.sorted()
-        swallowApps = config.swallowApps.filter { !$0.contains(".") }.sorted()
+        // As written in the config, without the bundle IDs the names stand for.
+        floatApps = PanelessConfig.written(config.floatApps)
+        excludeApps = PanelessConfig.written(config.excludeApps)
+        stickyApps = PanelessConfig.written(config.stickyApps)
+        swallowApps = PanelessConfig.written(config.swallowApps)
         appLayoutRules = config.appLayoutRules
         workspaceNames = config.workspaceNames
         appWorkspaceRules = config.appWorkspaceRules
@@ -189,6 +189,8 @@ class SettingsViewModel: ObservableObject {
         config.excludeApps = Set(excludeApps)
         config.stickyApps = Set(stickyApps)
         config.swallowApps = Set(swallowApps)
+        // The running config matches by bundle ID too, as a loaded one does.
+        config.addBundleIDs()
         config.appLayoutRules = appLayoutRules
         config.workspaceNames = workspaceNames
         config.appWorkspaceRules = appWorkspaceRules
