@@ -14,6 +14,23 @@ enum WindowFocus {
         }
     }
 
+    /// The window a keyboard action acts on. The system's own answer wins whenever it names a
+    /// window managed on this workspace: Paneless hears of a focus change inside an app, but
+    /// not always of a click or Cmd+Tab over to another app, so what it remembers can be the
+    /// window used before. Acting on that moved or closed a window other than the one in
+    /// front. What is remembered still answers when the system names nothing managed here,
+    /// and while it is fresh: for a moment after Paneless moves focus itself the system still
+    /// names the window it moved from, and a second key pressed quickly must not act on that.
+    static func actionTarget(live: CGWindowID?, remembered: CGWindowID?,
+                             liveIsManagedHere: Bool, rememberedIsFresh: Bool) -> CGWindowID? {
+        if rememberedIsFresh, let remembered { return remembered }
+        if let live, liveIsManagedHere { return live }
+        return remembered ?? live
+    }
+
+    /// How long what Paneless remembers is taken over the system's answer after it was set.
+    static let freshFor: Double = 0.5
+
     static func afterClosingTiled(destroyed: CGWindowID, focused: CGWindowID?,
                                   appStillTiled: Bool, focusedSurvives: Bool) -> Bool {
         if focusedSurvives, let focused, focused != destroyed { return false }

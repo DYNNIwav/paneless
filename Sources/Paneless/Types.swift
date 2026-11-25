@@ -94,6 +94,25 @@ enum WMAction {
     case toggleApp(String)
 }
 
+extension WMAction {
+    /// Whether holding the shortcut down runs the action again. Stepping focus, moving a
+    /// window along and resizing are meant to repeat. Anything that acts once on the focused
+    /// window is not: focus moves on to the next window after it, so a key held a moment too
+    /// long sent that one to the workspace too, or closed it.
+    var repeatsWhileHeld: Bool {
+        switch self {
+        case .focusDirection, .focusNext, .focusPrev, .rotateNext, .rotatePrev,
+             .growFocused, .shrinkFocused, .increaseGap, .decreaseGap,
+             .positionUp, .positionDown,
+             .niriMoveLeft, .niriMoveRight, .niriMoveUp, .niriMoveDown,
+             .niriMoveColumnLeft, .niriMoveColumnRight:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 struct TilingRegion {
     var x: CGFloat
     var y: CGFloat

@@ -82,8 +82,11 @@ class WindowManager: WindowObserverDelegate {
     var floatingWindows: Set<CGWindowID> = []
     var fullscreenWindows: Set<CGWindowID> = []
     var stickyWindows: Set<CGWindowID> = []
+    /// When `focusedWindowID` was last set, by Paneless or from a system notification.
+    private var focusSetAt = Date.distantPast
     var focusedWindowID: CGWindowID? {
         didSet {
+            focusSetAt = Date()
             if let focusedWindowID { focusReturn.focused(focusedWindowID, tiled: layoutEngine.contains(focusedWindowID)) }
         }
     }
@@ -360,7 +363,7 @@ class WindowManager: WindowObserverDelegate {
             return
         }
 
-        var currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        var currentID = actionWindow()
 
         let layouts = layoutEngine.calculateFrames(in: getTilingRegion())
 
@@ -396,7 +399,7 @@ class WindowManager: WindowObserverDelegate {
         let allWindows = layoutEngine.tiledWindows + Array(floatingWindows).sorted()
         guard allWindows.count >= 2 else { return }
 
-        let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        let currentID = actionWindow()
         let currentIdx = currentID.flatMap { allWindows.firstIndex(of: $0) } ?? 0
 
         let nextIdx: Int
@@ -442,7 +445,7 @@ class WindowManager: WindowObserverDelegate {
     }
 
     private func moveToMonitor(_ direction: Direction) {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+        guard let windowID = actionWindow(),
               let element = axElements[windowID],
               let currentFrame = AccessibilityBridge.getFrame(of: element)
         else { return }
@@ -479,7 +482,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Swap / Layout
 
     private func swapWithMaster() {
-        guard let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        guard let currentID = actionWindow() else { return }
         if config.niriMode {
             // Move active column to first position
             let colIdx = layoutEngine.niriActiveColumn
@@ -521,10 +524,26 @@ class WindowManager: WindowObserverDelegate {
         }
     }
 
+    /// The window a keyboard action acts on (`WindowFocus.actionTarget`): the one the system
+    /// says is in front when Paneless manages it here, else the one Paneless remembers. What
+    /// Paneless remembers is brought into line, so the rest of the action sees the same window.
+    private func actionWindow() -> CGWindowID? {
+        let live = AccessibilityBridge.getFocusedWindowID()
+        let target = WindowFocus.actionTarget(
+            live: live, remembered: focusedWindowID,
+            liveIsManagedHere: live.map { trackedWindows[$0] != nil } ?? false,
+            rememberedIsFresh: Date().timeIntervalSince(focusSetAt) < WindowFocus.freshFor)
+        if let target, target != focusedWindowID, trackedWindows[target] != nil {
+            panelessLog("Focus was stale: acting on \(target), not \(focusedWindowID.map(String.init) ?? "none")")
+            focusedWindowID = target
+        }
+        return target
+    }
+
     // MARK: - Float / Fullscreen
 
     private func toggleFloat() {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        guard let windowID = actionWindow() else { return }
 
         if floatingWindows.contains(windowID) {
             floatingWindows.remove(windowID)
@@ -537,7 +556,7 @@ class WindowManager: WindowObserverDelegate {
     }
 
     private func toggleFullscreen() {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+        guard let windowID = actionWindow(),
               let element = axElements[windowID]
         else { return }
 
@@ -565,7 +584,7 @@ class WindowManager: WindowObserverDelegate {
     private enum Position { case left, right, up, down, fill, center }
 
     private func positionFocused(_ position: Position) {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        guard let windowID = actionWindow() else { return }
 
         switch position {
         case .left:
@@ -626,7 +645,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Close
 
     private func closeFocused() {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+        guard let windowID = actionWindow(),
               let element = axElements[windowID]
         else { return }
 
@@ -1642,6 +1661,9 @@ class WindowManager: WindowObserverDelegate {
     }
 
     func applicationActivated(pid: pid_t, name: String) {
+        // A click or Cmd+Tab over to another app changes which window is in front without
+        // that app's own focused window changing, so no focus notification comes. Read it.
+        if !isAutoSwitching { focusChanged() }
         guard config.focusFollowsApp, !isAutoSwitching else { return }
 
         let screen = NSScreen.safeMain
@@ -2085,7 +2107,7 @@ class WindowManager: WindowObserverDelegate {
         let total = columns.count + floating.count
         guard total >= 2 else { return }
 
-        let currentID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID()
+        let currentID = actionWindow()
         let index: Int
         if let wid = currentID, let found = layoutEngine.findWindowInColumns(wid) {
             index = found.col
@@ -2815,7 +2837,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Window Minimize to Workspace
 
     private func minimizeFocused() {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID(),
+        guard let windowID = actionWindow(),
               let element = axElements[windowID],
               trackedWindows[windowID] != nil
         else { return }
@@ -2943,7 +2965,7 @@ class WindowManager: WindowObserverDelegate {
     // MARK: - Window Marks (vim-style)
 
     private func setWindowMark(_ key: String) {
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        guard let windowID = actionWindow() else { return }
         windowMarks[key] = windowID
         let appName = trackedWindows[windowID]?.appName ?? "unknown"
         panelessLog("Mark '\(key)' set on window \(windowID) (\(appName))")
@@ -3105,7 +3127,7 @@ class WindowManager: WindowObserverDelegate {
 
     private func moveToVirtualWorkspace(_ number: Int) {
         guard number >= 1 && number <= 9 else { return }
-        guard let windowID = focusedWindowID ?? AccessibilityBridge.getFocusedWindowID() else { return }
+        guard let windowID = actionWindow() else { return }
 
         // Sticky windows cannot be moved to a specific workspace (they're on all)
         guard !stickyWindows.contains(windowID) else {

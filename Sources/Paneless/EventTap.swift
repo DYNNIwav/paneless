@@ -113,7 +113,7 @@ class EventTap {
     }
 
     /// Process a key event. Returns true if the event should be swallowed.
-    func handleKey(_ keyCode: UInt16, flags: CGEventFlags) -> Bool {
+    func handleKey(_ keyCode: UInt16, flags: CGEventFlags, isRepeat: Bool = false) -> Bool {
         // Match against configured key bindings
         // Mask out device-dependent bits for reliable comparison
         let relevantMask: CGEventFlags = [.maskAlternate, .maskShift, .maskCommand, .maskControl]
@@ -138,7 +138,8 @@ class EventTap {
                 if !hyperkeyDown && bindMods.contains(.maskAlternate) && (rawFlags & rightAltFlag) != 0 {
                     continue
                 }
-                dispatch(binding.action)
+                // A held key is still ours to swallow, but runs only what is meant to repeat.
+                if !isRepeat || binding.action.repeatsWhileHeld { dispatch(binding.action) }
                 return true
             }
         }
@@ -199,7 +200,8 @@ private func eventTapCallback(
 
     case .keyDown:
         if tap.handleHyperkeyDown(keyCode) { return nil }
-        if tap.handleKey(keyCode, flags: flags) { return nil }
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if tap.handleKey(keyCode, flags: flags, isRepeat: isRepeat) { return nil }
         // No binding matched, but hyperkey held? Inject modifiers for other apps
         tap.injectHyperModifiers(into: event)
         return Unmanaged.passUnretained(event)
