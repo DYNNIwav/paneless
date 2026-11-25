@@ -63,54 +63,6 @@ struct EditableBinding: Identifiable, Equatable {
     }
 }
 
-// MARK: - Action definitions
-
-private struct ActionDef {
-    let label: String
-    let value: String
-}
-
-private let allActions: [ActionDef] = [
-    ActionDef(label: "Focus next", value: "focus_next"),
-    ActionDef(label: "Focus previous", value: "focus_prev"),
-    ActionDef(label: "Focus left", value: "focus_left"),
-    ActionDef(label: "Focus right", value: "focus_right"),
-    ActionDef(label: "Focus up", value: "focus_up"),
-    ActionDef(label: "Focus down", value: "focus_down"),
-    ActionDef(label: "Swap with master", value: "swap_master"),
-    ActionDef(label: "Rotate next", value: "rotate_next"),
-    ActionDef(label: "Rotate previous", value: "rotate_prev"),
-    ActionDef(label: "Cycle layout", value: "cycle_layout"),
-    ActionDef(label: "Grow focused", value: "grow_focused"),
-    ActionDef(label: "Shrink focused", value: "shrink_focused"),
-    ActionDef(label: "Increase gap", value: "increase_gap"),
-    ActionDef(label: "Decrease gap", value: "decrease_gap"),
-    ActionDef(label: "Toggle float", value: "toggle_float"),
-    ActionDef(label: "Toggle fullscreen", value: "toggle_fullscreen"),
-    ActionDef(label: "Close window", value: "close"),
-    ActionDef(label: "Minimize", value: "minimize"),
-    ActionDef(label: "Position left", value: "position_left"),
-    ActionDef(label: "Position right", value: "position_right"),
-    ActionDef(label: "Position up", value: "position_up"),
-    ActionDef(label: "Position down", value: "position_down"),
-    ActionDef(label: "Position fill", value: "position_fill"),
-    ActionDef(label: "Position center", value: "position_center"),
-    ActionDef(label: "Focus monitor left", value: "focus_monitor left"),
-    ActionDef(label: "Focus monitor right", value: "focus_monitor right"),
-    ActionDef(label: "Move to monitor left", value: "move_to_monitor left"),
-    ActionDef(label: "Move to monitor right", value: "move_to_monitor right"),
-    ActionDef(label: "Niri consume", value: "niri_consume"),
-    ActionDef(label: "Niri expel", value: "niri_expel"),
-    ActionDef(label: "Retile", value: "retile"),
-    ActionDef(label: "Reload config", value: "reload_config"),
-]
-
-private let actionLabelMap: [String: String] = {
-    var map: [String: String] = [:]
-    for a in allActions { map[a.value] = a.label }
-    return map
-}()
-
 // MARK: - Compact read-only row (displayed in the list)
 
 private struct BindingRow: View {
@@ -127,7 +79,7 @@ private struct BindingRow: View {
                 .foregroundStyle(.tertiary)
                 .font(.caption)
 
-            Text(actionLabelMap[binding.action] ?? binding.action)
+            Text(ActionLabels.label(for: binding.action))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -181,12 +133,12 @@ private struct BindingEditor: View {
                 Text("Action")
                     .frame(width: 70, alignment: .trailing)
                 Picker("", selection: $binding.action) {
-                    ForEach(allActions, id: \.value) { a in
+                    ForEach(ActionLabels.choices(including: binding.action), id: \.value) { a in
                         Text(a.label).tag(a.value)
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 200)
+                .frame(width: 260)
                 Spacer()
             }
 
@@ -195,7 +147,7 @@ private struct BindingEditor: View {
                 Text("Result")
                     .frame(width: 70, alignment: .trailing)
                     .foregroundStyle(.secondary)
-                Text(binding.shortcutDisplay + "  ->  " + (actionLabelMap[binding.action] ?? binding.action))
+                Text(binding.shortcutDisplay + "  ->  " + (ActionLabels.label(for: binding.action)))
                     .fontWeight(.medium)
                 Spacer()
             }
