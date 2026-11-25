@@ -63,4 +63,42 @@ import Testing
         #expect(WindowFocus.afterClosingFloating(destroyed: 10, focused: nil,
             focusedProcess: nil, destroyedProcess: 100, survivingFocus: nil))
     }
+
+    /// Clicked or Cmd+Tabbed over to another app: Paneless still remembers the window used
+    /// before, and Option+Shift+number must take the one in front.
+    @Test func anActionTakesTheWindowInFrontNotTheOneRememberedFromBefore() {
+        #expect(WindowFocus.actionTarget(live: 20, remembered: 10,
+            liveIsManagedHere: true, rememberedIsFresh: false) == 20)
+        #expect(WindowFocus.actionTarget(live: 20, remembered: nil,
+            liveIsManagedHere: true, rememberedIsFresh: false) == 20)
+    }
+
+    /// A menu, a popup or an app Paneless leaves alone is in front: the remembered window stands.
+    @Test func whatIsRememberedAnswersWhenTheSystemNamesNothingManagedHere() {
+        #expect(WindowFocus.actionTarget(live: 99, remembered: 10,
+            liveIsManagedHere: false, rememberedIsFresh: false) == 10)
+        #expect(WindowFocus.actionTarget(live: nil, remembered: 10,
+            liveIsManagedHere: false, rememberedIsFresh: false) == 10)
+        #expect(WindowFocus.actionTarget(live: 99, remembered: nil,
+            liveIsManagedHere: false, rememberedIsFresh: false) == 99)
+    }
+
+    /// Paneless just moved focus itself and the system has not caught up: a second key
+    /// pressed quickly acts on the window Paneless moved to.
+    @Test func aFocusPanelessJustSetIsNotOverruledByTheSystemsLag() {
+        #expect(WindowFocus.actionTarget(live: 10, remembered: 20,
+            liveIsManagedHere: true, rememberedIsFresh: true) == 20)
+    }
+
+    /// A shortcut held a moment too long: what acts once on the focused window does not run
+    /// again on the window that took its place, while stepping and resizing still repeat.
+    @Test func aHeldKeyRepeatsOnlyWhatIsMeantToRepeat() {
+        let once: [WMAction] = [.moveToWorkspace(3), .closeFocused, .toggleFloat, .toggleFullscreen,
+                                .minimizeToWorkspace, .toggleApp("Terminal"), .swapWithMaster, .cycleLayout,
+                                .setMark("a"), .moveToMonitor(.left), .switchWorkspace(2)]
+        for action in once { #expect(!action.repeatsWhileHeld) }
+        let held: [WMAction] = [.focusNext, .focusPrev, .focusDirection(.left), .growFocused, .shrinkFocused,
+                                .increaseGap, .niriMoveLeft, .niriMoveColumnRight]
+        for action in held { #expect(action.repeatsWhileHeld) }
+    }
 }
