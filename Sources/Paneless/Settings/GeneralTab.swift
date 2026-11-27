@@ -63,7 +63,7 @@ struct GeneralTab: View {
 
                 HStack {
                     Stepper("Inner gap", value: $viewModel.innerGap, in: 0...64, step: 1)
-                    Text("\(Int(viewModel.innerGap)) px")
+                    Text("\(Int(viewModel.innerGap)) pt")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -71,7 +71,7 @@ struct GeneralTab: View {
 
                 HStack {
                     Stepper("Outer gap", value: $viewModel.outerGap, in: 0...64, step: 1)
-                    Text("\(Int(viewModel.outerGap)) px")
+                    Text("\(Int(viewModel.outerGap)) pt")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -79,7 +79,7 @@ struct GeneralTab: View {
 
                 HStack {
                     Stepper("Single window padding", value: $viewModel.singleWindowPadding, in: 0...200, step: 4)
-                    Text("\(Int(viewModel.singleWindowPadding)) px")
+                    Text("\(Int(viewModel.singleWindowPadding)) pt")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -93,6 +93,7 @@ struct GeneralTab: View {
                 SettingDescription(text: "Smooth window transitions using GPU-composited transforms. Disable for instant snapping.")
 
                 Toggle("Native macOS compositor", isOn: $viewModel.nativeAnimation)
+                SettingDescription(text: "Use the built-in macOS window tiling animation instead of GPU transforms. Incompatible with gaps.")
 
                 Toggle("Resize in one step", isOn: $viewModel.sizeOnce)
                 SettingDescription(text: "Take the final size at once and animate only the movement. A resize costs up to 50ms on a heavy app against 2ms for a move, so this keeps the frame rate up at the cost of the size snapping.")
@@ -107,8 +108,6 @@ struct GeneralTab: View {
                     : (viewModel.appDrivenAnimation == "moves"
                         ? "A move is handed to the app, which animates it at around 110fps from a single message. Anything that also resizes stays with Paneless, since apps snap size rather than ease it."
                         : "Everything is handed to the app. Smoothest for movement, but sizes jump instead of growing."))
-                SettingDescription(text: "Hand each app its destination once and let it run its own animation. Fewer messages and no cost to Paneless, but the pacing is less even and the curve is the system's rather than ours.")
-                SettingDescription(text: "Use the built-in macOS window tiling animation instead of GPU transforms. Incompatible with gaps.")
             } header: {
                 Text("Animation")
             }
@@ -118,7 +117,7 @@ struct GeneralTab: View {
                 SettingDescription(text: "Automatically focus the window under your mouse cursor.")
 
                 Toggle("Focus follows app", isOn: $viewModel.focusFollowsApp)
-                SettingDescription(text: "Auto-switch workspace when an app on another workspace activates (e.g. clicking a notification).")
+                SettingDescription(text: "Bring an app's windows to the workspace you are on when it is activated from another one, for example by clicking a notification.")
 
                 Toggle("Auto-float dialogs", isOn: $viewModel.autoFloatDialogs)
                 SettingDescription(text: "Automatically float small windows like dialogs and popups instead of tiling them.")

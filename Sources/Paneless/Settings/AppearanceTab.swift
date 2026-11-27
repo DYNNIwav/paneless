@@ -21,14 +21,14 @@ struct AppearanceTab: View {
                 if viewModel.borderEnabled {
                     HStack {
                         Stepper("Width", value: $viewModel.borderWidth, in: 1...10, step: 1)
-                        Text("\(Int(viewModel.borderWidth)) px")
+                        Text("\(Int(viewModel.borderWidth)) pt")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
 
                     HStack {
                         Stepper("Radius", value: $viewModel.borderRadius, in: 0...30, step: 1)
-                        Text("\(Int(viewModel.borderRadius)) px")
+                        Text("\(Int(viewModel.borderRadius)) pt")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }

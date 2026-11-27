@@ -98,7 +98,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startPermissionCheck() {
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if AXIsProcessTrusted() {
                 self.accessibilityGranted = true
@@ -201,7 +201,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         if !accessibilityGranted {
-            let permItem = NSMenuItem(title: "Grant Accessibility Permission...", action: #selector(openAccessibilitySettings(_:)), keyEquivalent: "")
+            let permItem = NSMenuItem(title: "Grant Accessibility Permission…", action: #selector(openAccessibilitySettings(_:)), keyEquivalent: "")
             permItem.target = self
             menu.addItem(permItem)
             menu.addItem(NSMenuItem.separator())
@@ -218,11 +218,11 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
         reloadItem.target = self
         menu.addItem(reloadItem)
 
-        let editConfigItem = NSMenuItem(title: "Edit Config...", action: #selector(editConfig(_:)), keyEquivalent: "")
+        let editConfigItem = NSMenuItem(title: "Edit Config…", action: #selector(editConfig(_:)), keyEquivalent: "")
         editConfigItem.target = self
         menu.addItem(editConfigItem)
 
-        let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        let prefsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
         prefsItem.keyEquivalentModifierMask = .command
         prefsItem.target = self
         menu.addItem(prefsItem)
@@ -553,7 +553,7 @@ class PanelessAppDelegate: NSObject, NSApplicationDelegate {
 
         // Add menu item for granting permission
         if let menu = statusItem?.menu {
-            let inputItem = NSMenuItem(title: "Grant Input Monitoring...", action: #selector(openInputMonitoringSettings(_:)), keyEquivalent: "")
+            let inputItem = NSMenuItem(title: "Grant Input Monitoring…", action: #selector(openInputMonitoringSettings(_:)), keyEquivalent: "")
             inputItem.target = self
             // Insert before Quit
             let quitIdx = menu.items.firstIndex(where: { $0.title == "Quit Paneless" }) ?? menu.items.count
@@ -636,7 +636,8 @@ extension PanelessAppDelegate: NSMenuDelegate {
             } else {
                 nameStr = "Workspace \(wsNum)"
             }
-            let title = isActive ? "● \(nameStr)\(countStr)" : "○ \(nameStr)\(countStr)"
+            // The checkmark below marks the active one; a second mark only adds noise.
+            let title = "\(nameStr)\(countStr)"
 
             let item = NSMenuItem(title: title, action: #selector(switchToWorkspace(_:)), keyEquivalent: "")
             item.target = self
